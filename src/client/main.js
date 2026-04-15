@@ -215,8 +215,15 @@ function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, bro
       if (!ws.layout && ws.terminalIds.length) {
         ws.layout = null;
         for (const tid of ws.terminalIds) ws.layout = addToLayoutTree(ws.layout, tid, 'horizontal');
+      } else if (ws.layout && ws.terminalIds.length) {
+        // Layout exists but may be incomplete — add any terminals missing from the tree
+        const inLayout = collectLayoutIds(ws.layout);
+        for (const tid of ws.terminalIds) {
+          if (!inLayout.has(tid)) {
+            ws.layout = addToLayoutTree(ws.layout, tid, 'horizontal');
+          }
+        }
       }
-      // Add any terminals not in any workspace to the active one
     }
     // Check for orphaned terminals
     const assigned = new Set(S.workspaces.flatMap(w => w.terminalIds));
