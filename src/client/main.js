@@ -962,7 +962,9 @@ function setupUI() {
   // Workspace dialog
   document.querySelectorAll('input[name="ws-type"]').forEach(r => {
     r.addEventListener('change', () => {
-      document.getElementById('ws-ssh-fields').classList.toggle('hidden', r.value !== 'remote' || !r.checked);
+      const isRemote = r.value === 'remote' && r.checked;
+      document.getElementById('ws-ssh-fields').classList.toggle('hidden', !isRemote);
+      document.getElementById('ws-local-fields').classList.toggle('hidden', isRemote);
     });
   });
   document.getElementById('ws-confirm').addEventListener('click', () => {
