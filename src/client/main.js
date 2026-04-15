@@ -749,8 +749,8 @@ function navTerminals(dir) {
 // Setup UI
 // ============================================
 function setupUI() {
-  // Disable browser right-click across the app
-  document.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Disable right-click across the app (capture phase to override xterm.js)
+  document.addEventListener('contextmenu', (e) => e.preventDefault(), true);
 
   document.getElementById('btn-new-terminal').addEventListener('click', showCreateDialog);
   document.getElementById('btn-toggle-browser').addEventListener('click', () => toggleBrowser());
