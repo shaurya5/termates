@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -513,6 +514,23 @@ unixServer.listen(SOCKET_PATH, () => {
 
 // --- Restore session and start ---
 restoreSession();
+
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  Port ${PORT} is already in use. Another instance may be running.`);
+    // Try to kill the existing process and retry once
+    try {
+      execSync(`lsof -ti :${PORT} | xargs kill 2>/dev/null`, { stdio: 'pipe' });
+      console.log('  Killed existing process, retrying...');
+      setTimeout(() => httpServer.listen(PORT, '127.0.0.1'), 1500);
+      return;
+    } catch (e) {
+      console.error(`  Could not free port. Run: lsof -ti :${PORT} | xargs kill`);
+      process.exit(1);
+    }
+  }
+  throw err;
+});
 
 httpServer.listen(PORT, '127.0.0.1', () => {
   console.log('');
