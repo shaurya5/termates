@@ -14,9 +14,9 @@
     "start:server": "npm run build && node server/index.js",
     "dev": "npm run build:dev && electron .",
     "dev:server": "npm run build:dev && node server/index.js",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
@@ -72,6 +72,10 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "author": {
+    "name": "Shaurya Gupta",
+    "email": "shauryag@nvidia.com"
   },
   "private": true,
   "license": "MIT"
