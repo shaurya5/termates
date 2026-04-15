@@ -2,14 +2,13 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # Run the same sanity checks before packaging
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -36,7 +35,7 @@ jobs:
       - run: npm ci
       - run: npm run dist:mac
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false # skip code signing in CI
+          CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
         with:
           name: termates-mac
@@ -64,3 +63,19 @@ jobs:
             dist/*.AppImage
             dist/*.deb
           if-no-files-found: error
+
+  publish:
+    name: Create GitHub Release
+    needs: [package-mac, package-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
