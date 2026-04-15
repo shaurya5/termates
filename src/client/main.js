@@ -854,9 +854,15 @@ function fitAll() {
 // ============================================
 function showCreateDialog() {
   const d = document.getElementById('create-dialog');
+  const ws = activeWs();
+  const isRemote = ws?.type === 'remote' || !!ws?.sshTarget;
   document.getElementById('create-name').value = nextTermName();
   document.getElementById('create-role').value = '';
-  document.getElementById('create-cwd').value = '';
+  // Pre-fill working directory from workspace
+  const cwdInput = document.getElementById('create-cwd');
+  cwdInput.value = (isRemote ? ws?.remoteCwd : ws?.cwd) || '';
+  // Hide browse button for remote workspaces
+  document.getElementById('create-cwd-browse').classList.toggle('hidden', isRemote);
   d.showModal(); document.getElementById('create-name').focus(); document.getElementById('create-name').select();
 }
 
