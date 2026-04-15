@@ -80,6 +80,19 @@ function subscribeTerminalOutput(terminal) {
   terminal.onData((data) => {
     broadcast({ type: 'terminal:output', payload: { id: terminal.id, data } });
   });
+  // Auto-cleanup when the process exits (user typed exit, shell died, etc.)
+  terminal.onExit((id) => {
+    setTimeout(() => {
+      // Clean up after a short delay to let the exit message render
+      if (ptyManager.get(id)) {
+        linkManager.removeTerminal(id);
+        removeTerminalFromWorkspaces(id);
+        ptyManager.destroy(id);
+        broadcast({ type: 'terminal:destroyed', payload: { id } });
+        persistState();
+      }
+    }, 500);
+  });
 }
 
 // --- Restore previous session ---

@@ -268,9 +268,15 @@ export class PtyManager {
       listeners: new Set(),
       createdAt: Date.now(),
 
+      exitCallbacks: new Set(),
+
       onData(callback) {
         terminal.listeners.add(callback);
         return () => terminal.listeners.delete(callback);
+      },
+
+      onExit(callback) {
+        terminal.exitCallbacks.add(callback);
       },
 
       getBuffer(lines = 50) {
@@ -292,9 +298,11 @@ export class PtyManager {
 
     ptyProcess.onExit(({ exitCode }) => {
       for (const cb of terminal.listeners) {
-        try {
-          cb(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
-        } catch (e) { /* ignore */ }
+        try { cb(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`); } catch (e) {}
+      }
+      // Notify exit callbacks (server uses this for auto-cleanup)
+      for (const cb of terminal.exitCallbacks) {
+        try { cb(terminal.id, exitCode); } catch (e) {}
       }
     });
 
