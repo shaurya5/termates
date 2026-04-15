@@ -386,10 +386,18 @@ function createTermPanel(id) {
 
   const acts = document.createElement('div'); acts.className = 'panel-actions';
   const mkBtn = (lbl, fn, cls) => { const b = document.createElement('button'); b.className = 'panel-action-btn' + (cls ? ' ' + cls : ''); b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
-  acts.appendChild(mkBtn('\u2699', () => showEditDialog(id)));  // gear icon
+  const mkSvgBtn = (svg, fn, cls, title) => {
+    const b = document.createElement('button');
+    b.className = 'panel-action-btn' + (cls ? ' ' + cls : '');
+    b.innerHTML = svg;
+    if (title) b.title = title;
+    b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+    return b;
+  };
+  acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>', () => showEditDialog(id), '', 'Configure'));
   acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` })));
   acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }));
-  acts.appendChild(mkBtn('x', () => send('terminal:destroy', { id }), 'close'));
+  acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => send('terminal:destroy', { id }), 'close', 'Close'));
   hdr.appendChild(acts);
 
   const container = document.createElement('div'); container.className = 'terminal-container';
@@ -741,6 +749,9 @@ function navTerminals(dir) {
 // Setup UI
 // ============================================
 function setupUI() {
+  // Disable browser right-click across the app
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
   document.getElementById('btn-new-terminal').addEventListener('click', showCreateDialog);
   document.getElementById('btn-toggle-browser').addEventListener('click', () => toggleBrowser());
   document.getElementById('btn-link-mode').addEventListener('click', () => S.linkMode ? exitLinkMode() : enterLinkMode());
