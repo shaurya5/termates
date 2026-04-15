@@ -17,6 +17,11 @@ set -g history-limit 50000
 set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-256color:Tc"
 set -g allow-passthrough on
+unbind -n MouseDown3Pane
+unbind -n M-MouseDown3Pane
+unbind -n MouseDown3Status
+unbind -n MouseDown3StatusLeft
+unbind -n MouseDown3StatusRight
 `.trim();
 
 export class PtyManager {
