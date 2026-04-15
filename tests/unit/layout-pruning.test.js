@@ -1,62 +1,9 @@
 import { describe, it, expect } from 'vitest';
-
-// ---------------------------------------------------------------------------
-// Pure layout-tree functions extracted from src/client/main.js.
-//
-// These are intentionally re-implemented here (not imported) because main.js
-// is compiled as a browser IIFE bundle and cannot be imported directly in a
-// Node/Vitest environment.  The implementations are identical to the source.
-// ---------------------------------------------------------------------------
-
-/**
- * Remove a single terminal ID from a layout tree.
- * When a split loses one child, it collapses to the remaining child.
- */
-function removeFromLayoutTree(layout, id) {
-  if (!layout) return null;
-  if (layout.type === 'leaf') return layout.panelId === id ? null : layout;
-  if (layout.type === 'split') {
-    const l = removeFromLayoutTree(layout.children[0], id);
-    const r = removeFromLayoutTree(layout.children[1], id);
-    if (!l && !r) return null;
-    if (!l) return r;
-    if (!r) return l;
-    return { ...layout, children: [l, r] };
-  }
-  return layout;
-}
-
-/**
- * Prune a layout tree so that only leaves whose panelId is in validIds survive.
- * Split nodes that end up with one valid child collapse to that child.
- * Split nodes with zero valid children return null.
- */
-function pruneLayout(node, validIds) {
-  if (!node) return null;
-  if (node.type === 'leaf') return validIds.has(node.panelId) ? node : null;
-  if (node.type === 'split') {
-    const l = pruneLayout(node.children[0], validIds);
-    const r = pruneLayout(node.children[1], validIds);
-    if (!l && !r) return null;
-    if (!l) return r;
-    if (!r) return l;
-    return { ...node, children: [l, r] };
-  }
-  return null;
-}
-
-/**
- * Collect all panelIds present in a layout tree.
- */
-function collectLayoutIds(node) {
-  const ids = new Set();
-  (function walk(n) {
-    if (!n) return;
-    if (n.type === 'leaf') ids.add(n.panelId);
-    if (n.type === 'split') { walk(n.children[0]); walk(n.children[1]); }
-  })(node);
-  return ids;
-}
+import {
+  removeLayoutLeaf as removeFromLayoutTree,
+  pruneLayout,
+  collectLayoutIds,
+} from '../../shared/layout-tree.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

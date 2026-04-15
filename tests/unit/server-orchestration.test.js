@@ -1,44 +1,20 @@
 /**
- * Unit tests for the server orchestration logic in server/index.js.
+ * Unit tests for the server orchestration logic.
  *
  * These functions sit between the managers and coordinate state changes.
- * When they break, the *combination* of state across managers gets
- * inconsistent — terminals exist but don't appear in workspaces, layouts
- * have ghost panel IDs, links survive terminal deletion, etc.
+ * Now imported directly from server/orchestration.js (no more copy-paste).
  *
- * Since these functions are not exported from index.js, we re-implement
- * them here identically (same pattern as layout-pruning.test.js for the
- * client code). The test verifies the ALGORITHM, not the import path.
+ * For removeTerminalFromWorkspaces and addTerminalToWorkspace, the real
+ * functions take a stateManager object. We create a thin mock stateManager
+ * to test the workspace manipulation logic.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LinkManager } from '../../server/link-manager.js';
+import { removeLayoutLeaf } from '../../shared/layout-tree.js';
 
-// ---------------------------------------------------------------------------
-// Re-implement the server orchestration functions exactly as in index.js
-// ---------------------------------------------------------------------------
-
-/**
- * Remove a layout leaf by terminal ID (from server/index.js:67-79).
- * When a split loses one child, it collapses to the remaining child.
- */
-function removeLayoutLeaf(node, id) {
-  if (!node) return null;
-  if (node.type === 'leaf') return node.panelId === id ? null : node;
-  if (node.type === 'split') {
-    const l = removeLayoutLeaf(node.children[0], id);
-    const r = removeLayoutLeaf(node.children[1], id);
-    if (!l && !r) return null;
-    if (!l) return r;
-    if (!r) return l;
-    return { ...node, children: [l, r] };
-  }
-  return node;
-}
-
-/**
- * Remove a terminal from all workspaces (from server/index.js:53-65).
- */
+// The real orchestration functions take stateManager objects. For pure
+// workspace-array tests we use local wrappers that match the old test API.
 function removeTerminalFromWorkspaces(workspaces, terminalId) {
   for (const ws of workspaces) {
     ws.terminalIds = ws.terminalIds.filter(id => id !== terminalId);
@@ -51,9 +27,6 @@ function removeTerminalFromWorkspaces(workspaces, terminalId) {
   return workspaces;
 }
 
-/**
- * Add a terminal to the active workspace (from server/index.js:43-51).
- */
 function addTerminalToWorkspace(workspaces, activeWorkspaceId, terminalId) {
   const wsId = activeWorkspaceId || workspaces[0]?.id;
   const ws = workspaces.find(w => w.id === wsId);
