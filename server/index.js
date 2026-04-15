@@ -149,6 +149,15 @@ function handleWsMessage(ws, msg) {
       break;
     }
 
+    case 'terminal:configure': {
+      const { id, name, role } = payload;
+      if (name !== undefined) ptyManager.rename(id, name);
+      if (role !== undefined) ptyManager.setRole(id, role);
+      broadcast({ type: 'terminal:configured', payload: { id, name, role } });
+      persistState();
+      break;
+    }
+
     case 'terminal:destroy': {
       const { id } = payload;
       const removedLinks = linkManager.getLinksFor(id);

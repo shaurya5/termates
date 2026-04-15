@@ -159,6 +159,40 @@
         <button id="create-confirm" class="btn btn-primary">Create</button>
       </div>
     </dialog>
+
+    <!-- Edit Terminal Dialog -->
+    <dialog id="edit-dialog">
+      <div class="dialog-header">Configure Terminal</div>
+      <div class="dialog-body">
+        <input id="edit-id" type="hidden">
+        <label for="edit-name">Name:</label>
+        <input id="edit-name" type="text" placeholder="Terminal name">
+        <label for="edit-role">Role:</label>
+        <select id="edit-role">
+          <option value="">None</option>
+          <option value="lead">Lead</option>
+          <option value="coder">Coder</option>
+          <option value="reviewer">Reviewer</option>
+          <option value="tester">Tester</option>
+          <option value="researcher">Researcher</option>
+          <option value="devops">DevOps</option>
+        </select>
+        <label for="edit-status">Status:</label>
+        <select id="edit-status">
+          <option value="idle">Idle</option>
+          <option value="attention">Attention</option>
+          <option value="success">Success</option>
+          <option value="warning">Warning</option>
+          <option value="error">Error</option>
+        </select>
+      </div>
+      <div class="dialog-footer">
+        <button id="edit-delete" class="btn btn-danger">Delete Terminal</button>
+        <div style="flex:1"></div>
+        <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="edit-confirm" class="btn btn-primary">Save</button>
+      </div>
+    </dialog>
   </div>
 
   <script src="/dist/bundle.js"></script>

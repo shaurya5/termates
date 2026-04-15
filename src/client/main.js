@@ -56,6 +56,7 @@ function handleMsg(msg) {
     case 'terminal:output': onOutput(msg.payload); break;
     case 'terminal:destroyed': onDestroyed(msg.payload); break;
     case 'terminal:renamed': onRenamed(msg.payload); break;
+    case 'terminal:configured': onConfigured(msg.payload); break;
     case 'terminal:linked': onLinked(msg.payload); break;
     case 'terminal:unlinked': onUnlinked(msg.payload); break;
     case 'terminal:status-changed': onStatusChanged(msg.payload); break;
@@ -110,6 +111,17 @@ function onDestroyed({ id }) {
   if (S.activeTerminalId === id) {
     const first = S.terminals.keys().next().value;
     setActive(first || null);
+  }
+}
+
+function onConfigured({ id, name, role }) {
+  const t = S.terminals.get(id);
+  if (t) {
+    if (name !== undefined) t.name = name;
+    if (role !== undefined) t.role = role;
+    updateSidebar();
+    // Re-render the layout to update panel headers with new name/role
+    renderLayout();
   }
 }
 
@@ -374,6 +386,7 @@ function createTermPanel(id) {
 
   const acts = document.createElement('div'); acts.className = 'panel-actions';
   const mkBtn = (lbl, fn, cls) => { const b = document.createElement('button'); b.className = 'panel-action-btn' + (cls ? ' ' + cls : ''); b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
+  acts.appendChild(mkBtn('\u2699', () => showEditDialog(id)));  // gear icon
   acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` })));
   acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }));
   acts.appendChild(mkBtn('x', () => send('terminal:destroy', { id }), 'close'));
@@ -582,6 +595,7 @@ function updateSidebar() {
     cb.addEventListener('click', (e) => { e.stopPropagation(); send('terminal:destroy', { id }); });
     li.appendChild(cb);
     li.addEventListener('click', () => { if (S.linkMode) handleLinkClick(id); else { setActive(id); focusTerm(id); } });
+    li.addEventListener('dblclick', (e) => { e.preventDefault(); showEditDialog(id); });
     tl.appendChild(li);
   }
   if (S.terminals.size === 0) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No terminals yet'; tl.appendChild(e); }
@@ -663,6 +677,19 @@ function showCreateDialog() {
   document.getElementById('create-name').select();
 }
 
+function showEditDialog(id) {
+  const t = S.terminals.get(id);
+  if (!t) return;
+  document.getElementById('edit-id').value = id;
+  document.getElementById('edit-name').value = t.name;
+  document.getElementById('edit-role').value = t.role || '';
+  document.getElementById('edit-status').value = t.status || 'idle';
+  const d = document.getElementById('edit-dialog');
+  d.showModal();
+  document.getElementById('edit-name').focus();
+  document.getElementById('edit-name').select();
+}
+
 function openSendDialog() {
   if (!S.activeTerminalId) { showNotif('No active terminal', 'warning'); return; }
   const linked = getLinked(S.activeTerminalId);
@@ -742,6 +769,26 @@ function setupUI() {
   });
   document.getElementById('send-cancel').addEventListener('click', () => document.getElementById('send-dialog').close());
   document.getElementById('send-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) document.getElementById('send-confirm').click(); });
+
+  // Edit terminal dialog
+  document.getElementById('edit-confirm').addEventListener('click', () => {
+    const id = document.getElementById('edit-id').value;
+    const name = document.getElementById('edit-name').value.trim();
+    const role = document.getElementById('edit-role').value;
+    const status = document.getElementById('edit-status').value;
+    if (id && name) {
+      send('terminal:configure', { id, name, role: role || null });
+      if (status) send('terminal:status', { id, status });
+    }
+    document.getElementById('edit-dialog').close();
+  });
+  document.getElementById('edit-cancel').addEventListener('click', () => document.getElementById('edit-dialog').close());
+  document.getElementById('edit-delete').addEventListener('click', () => {
+    const id = document.getElementById('edit-id').value;
+    if (id) send('terminal:destroy', { id });
+    document.getElementById('edit-dialog').close();
+  });
+  document.getElementById('edit-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('edit-confirm').click(); });
 
   // Browser panel
   document.getElementById('btn-add-browser-tab').addEventListener('click', () => addBrowserTab());

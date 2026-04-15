@@ -286,6 +286,12 @@ export class PtyManager {
     return false;
   }
 
+  setRole(id, role) {
+    const t = this.terminals.get(id);
+    if (t) { t.role = role || null; return true; }
+    return false;
+  }
+
   // Destroy terminal AND its tmux session
   destroy(id) {
     const t = this.terminals.get(id);

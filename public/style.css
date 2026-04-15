@@ -1031,6 +1031,16 @@ dialog::backdrop {
   background: var(--bg-hover);
 }
 
+.btn-danger {
+  background: transparent;
+  color: var(--error);
+  border-color: transparent;
+}
+
+.btn-danger:hover {
+  background: rgba(248, 81, 73, 0.15);
+}
+
 /* ============================================
    Responsive / Empty States
    ============================================ */
