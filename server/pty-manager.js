@@ -2,7 +2,7 @@ import pty from 'node-pty';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { buildRemoteTmuxCommand } from './ssh-config.js';
 
 const TMUX_PREFIX = 'termates-';
@@ -115,18 +115,23 @@ export class PtyManager {
     let spawnFile, spawnArgs;
 
     if (this.tmuxAvailable) {
-      // Kill stale session with same name
       if (this._tmuxSessionExists(tmuxSession)) {
         try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
       }
 
-      // Spawn tmux directly via PTY (not detached+attach) so TERM/colors inherit correctly
-      spawnFile = 'tmux';
-      spawnArgs = ['-f', TMUX_CONF, 'new-session', '-s', tmuxSession,
+      // Create detached session (synchronous — session exists immediately after)
+      // then attach via PTY. Pass env with TERM so colors work inside tmux.
+      const createCmd = ['tmux', '-f', TMUX_CONF, 'new-session', '-d', '-s', tmuxSession,
         '-x', String(termCols), '-y', String(termRows)];
-      if (sshTarget) {
-        spawnArgs.push('ssh', sshTarget);
+      if (sshTarget) createCmd.push('ssh', sshTarget);
+      try {
+        execSync(createCmd.join(' '), { cwd: workDir, env, stdio: 'pipe' });
+      } catch (e) {
+        execSync(`tmux new-session -d -s "${tmuxSession}"`, { cwd: workDir, env, stdio: 'pipe' });
       }
+
+      spawnFile = 'tmux';
+      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
     } else {
       const defaultShell = shell || process.env.SHELL || '/bin/zsh';
       spawnFile = defaultShell;
@@ -204,9 +209,6 @@ export class PtyManager {
     if (role) env.TERMATES_ROLE = role;
 
     const { sshArgs, remoteCmd } = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
-
-    // Build the full SSH command as a single array for pty.spawn
-    // ssh [opts] target "cd $HOME/path && tmux new-session -s name ..."
     const sshFullArgs = [...sshArgs.slice(1), remoteCmd];
 
     let spawnFile, spawnArgs;
@@ -214,18 +216,21 @@ export class PtyManager {
       if (this._tmuxSessionExists(tmuxSession)) {
         try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
       }
-      // Use pty.spawn for local tmux — pass SSH as the tmux shell command.
-      // No execSync, no shell expansion, no quoting issues.
-      // tmux new-session -d creates detached, then we attach.
-      // The SSH command with remote cmd is passed as separate args to avoid quoting.
-      const sshBin = sshArgs[0]; // 'ssh'
-      spawnFile = 'tmux';
-      spawnArgs = [
-        '-f', TMUX_CONF,
-        'new-session', '-s', tmuxSession,
+
+      // Same pattern as local: detached create + attach.
+      // Use execFileSync (not execSync) to pass args as array — no shell, no quoting issues.
+      const createArgs = ['-f', TMUX_CONF, 'new-session', '-d', '-s', tmuxSession,
         '-x', String(termCols), '-y', String(termRows),
-        sshBin, ...sshFullArgs,
-      ];
+        sshArgs[0], ...sshFullArgs];
+      try {
+        execFileSync('tmux', createArgs, { env, stdio: 'pipe' });
+      } catch (e) {
+        // Fallback: try without config
+        execFileSync('tmux', ['new-session', '-d', '-s', tmuxSession, sshArgs[0], ...sshFullArgs], { env, stdio: 'pipe' });
+      }
+
+      spawnFile = 'tmux';
+      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
     } else {
       spawnFile = sshArgs[0];
       spawnArgs = sshFullArgs;
