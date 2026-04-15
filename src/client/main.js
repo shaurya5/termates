@@ -1001,6 +1001,12 @@ function setupUI() {
 
   setupBrowserResize();
   window.addEventListener('resize', fitAll);
+  // Force redraw when app regains focus (fixes WebGL artifacts from background suspension)
+  window.addEventListener('focus', () => {
+    for (const [, t] of S.terminals) {
+      try { t.xterm.refresh(0, t.xterm.rows - 1); } catch (e) {}
+    }
+  });
   new ResizeObserver(fitAll).observe(document.getElementById('layout-root'));
 }
 
