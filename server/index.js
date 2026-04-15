@@ -385,6 +385,16 @@ app.get('/api/terminals', (req, res) => {
   res.json({ terminals: ptyManager.list(), links: linkManager.listAll() });
 });
 
+// Native folder dialog (Electron) or fallback
+app.post('/api/browse-dialog', async (req, res) => {
+  if (global.termatesDialog?.browseFolder) {
+    const selected = await global.termatesDialog.browseFolder();
+    res.json({ path: selected });
+  } else {
+    res.json({ path: null, error: 'Native dialog not available in server mode' });
+  }
+});
+
 // SSH hosts from ~/.ssh/config
 app.get('/api/ssh/hosts', (req, res) => {
   res.json({ hosts: parseSSHConfig() });

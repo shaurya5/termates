@@ -7,6 +7,19 @@ let serverStarted = false;
 const PORT = 7680;
 
 // --- Auto-update state (shared with the server via global) ---
+// Native folder dialog
+global.termatesDialog = {
+  async browseFolder() {
+    const win = BrowserWindow.getFocusedWindow();
+    const result = await dialog.showOpenDialog(win || mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select Working Directory',
+    });
+    if (result.canceled || !result.filePaths.length) return null;
+    return result.filePaths[0];
+  },
+};
+
 global.termatesUpdate = {
   status: 'idle',       // idle | checking | available | downloading | downloaded | error
   currentVersion: null,

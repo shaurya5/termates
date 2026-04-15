@@ -169,9 +169,9 @@
           <option value="devops">DevOps</option>
         </select>
         <label for="create-cwd">Working Directory:</label>
-        <div class="path-autocomplete">
-          <input id="create-cwd" type="text" placeholder="Type to search... (e.g. ~/projects)" autocomplete="off">
-          <div id="create-cwd-results" class="path-results hidden"></div>
+        <div style="display:flex;gap:6px">
+          <input id="create-cwd" type="text" placeholder="Leave empty for home directory" style="flex:1">
+          <button id="create-cwd-browse" class="btn btn-secondary" type="button" style="padding:4px 10px;font-size:11px">Browse</button>
         </div>
       </div>
       <div class="dialog-footer">
@@ -192,9 +192,9 @@
           <label class="radio-label"><input type="radio" name="ws-type" value="remote"> Remote (SSH)</label>
         </div>
         <label for="ws-cwd">Working Directory:</label>
-        <div class="path-autocomplete">
-          <input id="ws-cwd" type="text" placeholder="Type to search... (e.g. ~/projects)" autocomplete="off">
-          <div id="ws-cwd-results" class="path-results hidden"></div>
+        <div style="display:flex;gap:6px">
+          <input id="ws-cwd" type="text" placeholder="Leave empty for home directory" style="flex:1">
+          <button id="ws-cwd-browse" class="btn btn-secondary" type="button" style="padding:4px 10px;font-size:11px">Browse</button>
         </div>
         <div id="ws-ssh-fields" class="hidden">
           <label for="ws-ssh-target">SSH Target:</label>

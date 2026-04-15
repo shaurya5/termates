@@ -976,12 +976,12 @@ function setupUI() {
     document.getElementById('ws-dialog').close();
   });
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
-  // ws-cwd autocomplete is set up above via setupPathAutocomplete
+  // ws-cwd browse is set up above
   document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('ws-confirm').click(); });
 
-  // Path autocomplete for directory inputs
-  setupPathAutocomplete('create-cwd', 'create-cwd-results');
-  setupPathAutocomplete('ws-cwd', 'ws-cwd-results');
+  // Browse buttons for directory selection
+  document.getElementById('create-cwd-browse').addEventListener('click', () => browseFolder('create-cwd'));
+  document.getElementById('ws-cwd-browse').addEventListener('click', () => browseFolder('ws-cwd'));
 
   // Browser panel
   document.getElementById('btn-add-browser-tab').addEventListener('click', () => addBrowserTab());
@@ -1007,94 +1007,15 @@ function setupUI() {
 }
 
 // ============================================
-// Path Autocomplete
+// Browse Folder (native Electron dialog)
 // ============================================
-function setupPathAutocomplete(inputId, resultsId) {
-  const input = document.getElementById(inputId);
-  const results = document.getElementById(resultsId);
-  let debounce = null;
-  let selectedIdx = -1;
-
-  input.addEventListener('input', () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(() => fetchResults(input.value), 200);
-  });
-
-  input.addEventListener('focus', () => {
-    // Show home directory contents on focus
-    fetchResults(input.value || '');
-  });
-
-  input.addEventListener('blur', () => {
-    setTimeout(() => results.classList.add('hidden'), 250);
-  });
-
-  input.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    const items = results.querySelectorAll('.path-result-item');
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
-      highlight(items);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      selectedIdx = Math.max(selectedIdx - 1, -1);
-      highlight(items);
-    } else if (e.key === 'Enter') {
-      if (selectedIdx >= 0 && items[selectedIdx]) {
-        e.preventDefault();
-        selectItem(items[selectedIdx].dataset.path);
-      }
-    } else if (e.key === 'Tab' && items.length > 0) {
-      e.preventDefault();
-      const item = items[selectedIdx >= 0 ? selectedIdx : 0];
-      input.value = item.dataset.path + '/';
-      selectedIdx = -1;
-      fetchResults(input.value);
-    } else if (e.key === 'Escape') {
-      results.classList.add('hidden');
-    }
-  });
-
-  function selectItem(p) {
-    input.value = p;
-    results.classList.add('hidden');
-    selectedIdx = -1;
-  }
-
-  function highlight(items) {
-    items.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
-    if (selectedIdx >= 0 && items[selectedIdx]) items[selectedIdx].scrollIntoView({ block: 'nearest' });
-  }
-
-  async function fetchResults(query) {
-    try {
-      const res = await fetch(`/api/browse?path=${encodeURIComponent(query)}`);
-      const { current, dirs } = await res.json();
-      results.innerHTML = '';
-      selectedIdx = -1;
-
-      if (!dirs.length) {
-        const empty = document.createElement('div');
-        empty.className = 'path-result-item';
-        empty.style.color = 'var(--text-muted)';
-        empty.textContent = query ? 'No matching directories' : 'Type a path or folder name';
-        results.appendChild(empty);
-        results.classList.remove('hidden');
-        return;
-      }
-
-      for (const d of dirs) {
-        const el = document.createElement('div');
-        el.className = 'path-result-item';
-        el.dataset.path = d.path;
-        const shortPath = d.path.replace(new RegExp('^' + current + '/?'), '');
-        el.innerHTML = `<span class="path-name">${d.name}/</span><span class="path-dir">${d.path}</span>`;
-        el.addEventListener('mousedown', (e) => { e.preventDefault(); selectItem(d.path); });
-        results.appendChild(el);
-      }
-      results.classList.remove('hidden');
-    } catch (e) { results.classList.add('hidden'); }
+async function browseFolder(inputId) {
+  try {
+    const res = await fetch('/api/browse-dialog', { method: 'POST' });
+    const { path } = await res.json();
+    if (path) document.getElementById(inputId).value = path;
+  } catch (e) {
+    showNotif('Browse not available in this mode', 'warning');
   }
 }
 
