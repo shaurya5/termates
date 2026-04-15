@@ -169,11 +169,42 @@
           <option value="devops">DevOps</option>
         </select>
         <label for="create-cwd">Working Directory:</label>
-        <input id="create-cwd" type="text" placeholder="Leave empty for home directory">
+        <div class="input-with-btn">
+          <input id="create-cwd" type="text" placeholder="Leave empty for home directory">
+          <button id="create-cwd-browse" class="btn btn-secondary btn-sm" type="button">Browse</button>
+        </div>
+        <div id="create-cwd-picker" class="dir-picker hidden"></div>
       </div>
       <div class="dialog-footer">
         <button id="create-cancel" class="btn btn-secondary">Cancel</button>
         <button id="create-confirm" class="btn btn-primary">Create</button>
+      </div>
+    </dialog>
+
+    <!-- New Workspace Dialog -->
+    <dialog id="ws-dialog">
+      <div class="dialog-header">New Workspace</div>
+      <div class="dialog-body">
+        <label for="ws-name">Name:</label>
+        <input id="ws-name" type="text" placeholder="e.g. My Project">
+        <label for="ws-type">Type:</label>
+        <div class="radio-group">
+          <label class="radio-label"><input type="radio" name="ws-type" value="local" checked> Local</label>
+          <label class="radio-label"><input type="radio" name="ws-type" value="remote"> Remote (SSH)</label>
+        </div>
+        <div id="ws-ssh-fields" class="hidden">
+          <label for="ws-ssh-target">SSH Target:</label>
+          <div class="input-with-btn">
+            <input id="ws-ssh-target" type="text" placeholder="user@hostname" list="ssh-hosts-list">
+            <datalist id="ssh-hosts-list"></datalist>
+          </div>
+          <label for="ws-remote-cwd">Remote Working Directory:</label>
+          <input id="ws-remote-cwd" type="text" placeholder="e.g. /home/user/project">
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button id="ws-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="ws-confirm" class="btn btn-primary">Create Workspace</button>
       </div>
     </dialog>
 

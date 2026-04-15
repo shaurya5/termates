@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
+import { buildRemoteTmuxCommand } from './ssh-config.js';
 
 const TMUX_PREFIX = 'termates-';
 const STATE_DIR = path.join(os.homedir(), '.termates');
@@ -195,6 +196,62 @@ export class PtyManager {
       cols, rows,
       sshTarget: target,
     });
+  }
+
+  // ---- Create remote terminal (SSH + remote tmux, multiplexed) ----
+  createRemote({ id, name, role, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
+    const termId = id || `t${this.nextId++}`;
+    const tmuxSession = this.tmuxAvailable ? this._tmuxName(termId) : null;
+    const termCols = cols || 80;
+    const termRows = rows || 24;
+
+    const env = { ...process.env };
+    env.TERMATES_TERMINAL_ID = termId;
+    env.TERMATES_TERMINAL_NAME = name || `Remote: ${sshTarget}`;
+    env.TERMATES_SOCKET = path.join(os.tmpdir(), 'termates.sock');
+    env.TERM = 'xterm-256color';
+    env.COLORTERM = 'truecolor';
+    if (role) env.TERMATES_ROLE = role;
+
+    // Import dynamically to avoid circular deps
+    const sshArgs = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
+
+    let spawnFile, spawnArgs;
+    if (this.tmuxAvailable) {
+      // Wrap in local tmux for local persistence
+      if (this._tmuxSessionExists(tmuxSession)) {
+        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
+      }
+      // Create local tmux session that runs the SSH command
+      const sshCmd = sshArgs.map(a => a.includes(' ') ? `"${a}"` : a).join(' ');
+      try {
+        execSync(`tmux -f "${TMUX_CONF}" new-session -d -s "${tmuxSession}" -x ${termCols} -y ${termRows} ${sshCmd}`, {
+          env, stdio: 'pipe',
+        });
+      } catch (e) {
+        // Fallback
+        execSync(`tmux new-session -d -s "${tmuxSession}" ${sshCmd}`, { env, stdio: 'pipe' });
+      }
+      spawnFile = 'tmux';
+      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
+    } else {
+      spawnFile = sshArgs[0];
+      spawnArgs = sshArgs.slice(1);
+    }
+
+    const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
+      name: 'xterm-256color',
+      cols: termCols,
+      rows: termRows,
+      cwd: process.env.HOME,
+      env,
+    });
+
+    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, tmuxSession);
+    terminal.remote = true;
+    terminal.sshTarget = sshTarget;
+    this.terminals.set(termId, terminal);
+    return terminal;
   }
 
   // ---- Internal: build terminal object ----

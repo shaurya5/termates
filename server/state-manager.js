@@ -16,7 +16,7 @@ export class StateManager {
     return {
       version: 2,
       workspaces: [
-        { id: 'w1', name: 'Workspace 1', terminalIds: [], links: [], layout: null },
+        { id: 'w1', name: 'Workspace 1', terminalIds: [], links: [], layout: null, type: 'local', sshTarget: null, remoteCwd: null },
       ],
       activeWorkspaceId: 'w1',
       nextWorkspaceId: 2,

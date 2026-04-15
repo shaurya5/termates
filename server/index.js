@@ -10,6 +10,7 @@ import os from 'os';
 import { PtyManager } from './pty-manager.js';
 import { LinkManager } from './link-manager.js';
 import { StateManager } from './state-manager.js';
+import { parseSSHConfig, buildRemoteTmuxCommand } from './ssh-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -155,10 +156,23 @@ function handleWsMessage(ws, msg) {
 
   switch (type) {
     case 'terminal:create': {
-      const { name, shell, cwd, role, sshTarget } = payload || {};
-      const terminal = sshTarget
-        ? ptyManager.createSsh({ name, role, target: sshTarget })
-        : ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd, role });
+      const { name, shell, cwd, role, sshTarget, remoteCwd } = payload || {};
+      let terminal;
+      // Check if active workspace is remote
+      const wsState = stateManager.get();
+      const activeWsState = wsState.workspaces.find(w => w.id === wsState.activeWorkspaceId);
+      if (activeWsState?.sshTarget) {
+        // Auto-create as remote terminal using workspace's SSH target
+        terminal = ptyManager.createRemote({
+          name: name || `Terminal ${ptyManager.size + 1}`,
+          role, sshTarget: activeWsState.sshTarget,
+          remoteCwd: remoteCwd || activeWsState.remoteCwd,
+        });
+      } else if (sshTarget) {
+        terminal = ptyManager.createRemote({ name, role, sshTarget, remoteCwd });
+      } else {
+        terminal = ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd, role });
+      }
       subscribeTerminalOutput(terminal);
       addTerminalToWorkspace(terminal.id);
       broadcast({
@@ -334,6 +348,26 @@ app.get('/api/browser/snapshot', async (req, res) => {
 
 app.get('/api/terminals', (req, res) => {
   res.json({ terminals: ptyManager.list(), links: linkManager.listAll() });
+});
+
+// SSH hosts from ~/.ssh/config
+app.get('/api/ssh/hosts', (req, res) => {
+  res.json({ hosts: parseSSHConfig() });
+});
+
+// Directory listing for browse dialog
+app.get('/api/browse', (req, res) => {
+  const dir = req.query.path || os.homedir();
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const dirs = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => ({ name: e.name, path: path.join(dir, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ current: dir, parent: path.dirname(dir), dirs });
+  } catch (e) {
+    res.json({ current: dir, parent: path.dirname(dir), dirs: [], error: e.message });
+  }
 });
 
 // --- Update API (reads state from Electron's global, or checks GitHub directly) ---

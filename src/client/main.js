@@ -494,11 +494,42 @@ function switchWorkspace(wsId) {
   setTimeout(fitAll, 100);
 }
 
-function createWorkspace(name) {
+function createWorkspace(name, type, sshTarget, remoteCwd) {
   const id = `w${S.nextWorkspaceId++}`;
-  S.workspaces.push({ id, name: name || `Workspace ${S.workspaces.length + 1}`, terminalIds: [], links: [], layout: null });
+  S.workspaces.push({
+    id, name: name || `Workspace ${S.workspaces.length + 1}`,
+    terminalIds: [], links: [], layout: null,
+    type: type || 'local', sshTarget: sshTarget || null, remoteCwd: remoteCwd || null,
+  });
   switchWorkspace(id);
   persistWorkspaces();
+}
+
+function showWorkspaceDialog() {
+  const d = document.getElementById('ws-dialog');
+  document.getElementById('ws-name').value = '';
+  document.querySelector('input[name="ws-type"][value="local"]').checked = true;
+  document.getElementById('ws-ssh-fields').classList.add('hidden');
+  document.getElementById('ws-ssh-target').value = '';
+  document.getElementById('ws-remote-cwd').value = '';
+  // Load SSH hosts
+  loadSSHHosts();
+  d.showModal();
+  document.getElementById('ws-name').focus();
+}
+
+async function loadSSHHosts() {
+  try {
+    const res = await fetch('/api/ssh/hosts');
+    const { hosts } = await res.json();
+    const dl = document.getElementById('ssh-hosts-list');
+    dl.innerHTML = '';
+    for (const h of hosts) {
+      const opt = document.createElement('option');
+      opt.value = h.user ? `${h.user}@${h.host}` : h.host;
+      dl.appendChild(opt);
+    }
+  } catch (e) { /* silent */ }
 }
 
 function renameWorkspace(wsId, name) {
@@ -648,7 +679,10 @@ function updateSidebar() {
   for (const ws of S.workspaces) {
     const tab = document.createElement('button');
     tab.className = 'ws-tab' + (ws.id === S.activeWorkspaceId ? ' active' : '');
-    tab.textContent = ws.name;
+    if (ws.type === 'remote' || ws.sshTarget) {
+      const dot = document.createElement('span'); dot.className = 'ws-remote-dot'; tab.appendChild(dot);
+    }
+    tab.appendChild(document.createTextNode(ws.name));
     tab.addEventListener('click', () => switchWorkspace(ws.id));
     tab.addEventListener('dblclick', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -803,7 +837,7 @@ function setupKeys() {
         case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
         case 'W': e.preventDefault(); if (S.activeTerminalId) send('terminal:destroy', { id: S.activeTerminalId }); break;
-        case 'N': e.preventDefault(); createWorkspace(); break;
+        case 'N': e.preventDefault(); showWorkspaceDialog(); break;
       }
     }
     if (e.key === 'Escape' && S.linkMode) exitLinkMode();
@@ -832,7 +866,7 @@ function setupUI() {
   document.getElementById('btn-toggle-browser').addEventListener('click', () => toggleBrowser());
   document.getElementById('btn-link-mode').addEventListener('click', () => S.linkMode ? exitLinkMode() : enterLinkMode());
   document.getElementById('btn-cancel-link').addEventListener('click', exitLinkMode);
-  document.getElementById('btn-new-workspace').addEventListener('click', () => createWorkspace());
+  document.getElementById('btn-new-workspace').addEventListener('click', () => showWorkspaceDialog());
   document.getElementById('btn-delete-workspace').addEventListener('click', () => {
     if (S.workspaces.length > 1 && confirm(`Delete "${activeWs()?.name}"? All terminals in it will be closed.`))
       deleteWorkspace(S.activeWorkspaceId);
@@ -878,6 +912,37 @@ function setupUI() {
   });
   document.getElementById('edit-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('edit-confirm').click(); });
 
+  // Workspace dialog
+  document.querySelectorAll('input[name="ws-type"]').forEach(r => {
+    r.addEventListener('change', () => {
+      document.getElementById('ws-ssh-fields').classList.toggle('hidden', r.value !== 'remote' || !r.checked);
+    });
+  });
+  document.getElementById('ws-confirm').addEventListener('click', () => {
+    const name = document.getElementById('ws-name').value.trim();
+    const type = document.querySelector('input[name="ws-type"]:checked').value;
+    const sshTarget = document.getElementById('ws-ssh-target').value.trim();
+    const remoteCwd = document.getElementById('ws-remote-cwd').value.trim();
+    if (type === 'remote' && !sshTarget) { showNotif('SSH target required for remote workspace', 'warning'); return; }
+    createWorkspace(name, type, sshTarget || null, remoteCwd || null);
+    document.getElementById('ws-dialog').close();
+  });
+  document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
+  document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('ws-confirm').click(); });
+
+  // Directory browse button
+  document.getElementById('create-cwd-browse').addEventListener('click', () => {
+    const picker = document.getElementById('create-cwd-picker');
+    picker.classList.toggle('hidden');
+    if (!picker.classList.contains('hidden')) {
+      const current = document.getElementById('create-cwd').value || '';
+      loadDirectory(picker, current || '', (path) => {
+        document.getElementById('create-cwd').value = path;
+        picker.classList.add('hidden');
+      });
+    }
+  });
+
   // Browser panel
   document.getElementById('btn-add-browser-tab').addEventListener('click', () => addBrowserTab());
   document.getElementById('btn-close-browser').addEventListener('click', () => toggleBrowser(false));
@@ -899,6 +964,53 @@ function setupUI() {
   setupBrowserResize();
   window.addEventListener('resize', fitAll);
   new ResizeObserver(fitAll).observe(document.getElementById('layout-root'));
+}
+
+// ============================================
+// Directory Browser
+// ============================================
+async function loadDirectory(picker, dirPath, onSelect) {
+  try {
+    const res = await fetch(`/api/browse?path=${encodeURIComponent(dirPath)}`);
+    const { current, parent, dirs, error } = await res.json();
+    picker.innerHTML = '';
+    // Current path display
+    const pathEl = document.createElement('div');
+    pathEl.className = 'dir-picker-path';
+    pathEl.textContent = current;
+    picker.appendChild(pathEl);
+    // Select current directory button
+    const selectBtn = document.createElement('div');
+    selectBtn.className = 'dir-picker-item';
+    selectBtn.style.fontWeight = '600';
+    selectBtn.style.color = 'var(--accent)';
+    selectBtn.textContent = 'Select this directory';
+    selectBtn.addEventListener('click', () => onSelect(current));
+    picker.appendChild(selectBtn);
+    // Parent directory
+    if (parent && parent !== current) {
+      const parentEl = document.createElement('div');
+      parentEl.className = 'dir-picker-item parent';
+      parentEl.textContent = '.. (parent)';
+      parentEl.addEventListener('click', () => loadDirectory(picker, parent, onSelect));
+      picker.appendChild(parentEl);
+    }
+    // Child directories
+    for (const d of dirs) {
+      const el = document.createElement('div');
+      el.className = 'dir-picker-item';
+      el.textContent = d.name;
+      el.addEventListener('click', () => loadDirectory(picker, d.path, onSelect));
+      picker.appendChild(el);
+    }
+    if (error) {
+      const errEl = document.createElement('div');
+      errEl.className = 'dir-picker-item';
+      errEl.style.color = 'var(--error)';
+      errEl.textContent = error;
+      picker.appendChild(errEl);
+    }
+  } catch (e) { picker.innerHTML = '<div class="dir-picker-item" style="color:var(--error)">Failed to load</div>'; }
 }
 
 // ============================================
