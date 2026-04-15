@@ -1,17 +1,41 @@
 {
   "name": "termates",
   "version": "1.0.0",
-  "description": "On-device terminal multiplexer with agent linking and browser support",
+  "description": "On-device terminal multiplexer with persistent sessions, workspaces, and agent linking",
   "type": "module",
-  "main": "server/index.js",
+  "main": "electron/main.cjs",
   "bin": {
     "termates": "./bin/termates.js"
   },
   "scripts": {
     "build": "esbuild src/client/main.js --bundle --outfile=public/dist/bundle.js --format=iife --platform=browser --target=es2020 --minify",
     "build:dev": "esbuild src/client/main.js --bundle --outfile=public/dist/bundle.js --format=iife --platform=browser --target=es2020 --sourcemap",
-    "start": "npm run build && node server/index.js",
-    "dev": "npm run build:dev && node server/index.js"
+    "start": "npm run build && electron .",
+    "start:server": "npm run build && node server/index.js",
+    "dev": "npm run build:dev && electron .",
+    "dev:server": "npm run build:dev && node server/index.js",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.termates.app",
+    "productName": "Termates",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": ["dmg", "zip"],
+      "darkModeSupport": true
+    },
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "public/**/*",
+      "bin/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [],
+    "asar": false
   },
   "dependencies": {
     "commander": "^13.1.0",
@@ -23,6 +47,8 @@
     "xterm-addon-web-links": "^0.9.0"
   },
   "devDependencies": {
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
     "esbuild": "^0.25.0"
   },
   "engines": {

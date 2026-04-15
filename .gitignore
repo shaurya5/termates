@@ -1,5 +1,7 @@
 node_modules/
 public/dist/
+dist/
+build/
 *.log
 .DS_Store
 .playwright-mcp/

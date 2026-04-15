@@ -75,6 +75,11 @@ html, body {
   overflow: hidden;
 }
 
+/* macOS traffic light area - drag region for Electron */
+.sidebar-header {
+  -webkit-app-region: drag;
+}
+
 .sidebar-header {
   padding: 14px 16px 10px;
   border-bottom: 1px solid var(--border);
@@ -387,8 +392,9 @@ html, body {
   min-width: 0;
 }
 
-/* Toolbar */
+/* Toolbar - also serves as window drag region */
 #toolbar {
+  -webkit-app-region: drag;
   height: var(--toolbar-height);
   min-height: var(--toolbar-height);
   background: var(--bg-secondary);
@@ -420,6 +426,10 @@ html, body {
   font-family: var(--font-ui);
   transition: all 0.15s;
   white-space: nowrap;
+}
+
+.toolbar-btn {
+  -webkit-app-region: no-drag;
 }
 
 .toolbar-btn:hover {
