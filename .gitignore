@@ -5,3 +5,5 @@ build/
 *.log
 .DS_Store
 .playwright-mcp/
+modal-*.png
+redesign-*.png

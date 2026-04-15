@@ -26,12 +26,12 @@ const S = {
 };
 
 const xtermTheme = {
-  background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff', cursorAccent: '#0d1117',
-  selectionBackground: 'rgba(88, 166, 255, 0.3)',
-  black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
-  blue: '#58a6ff', magenta: '#bc8cff', cyan: '#56d4dd', white: '#e6edf3',
-  brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
-  brightBlue: '#79b8ff', brightMagenta: '#d2a8ff', brightCyan: '#76e3ea', brightWhite: '#f0f6fc',
+  background: '#09090b', foreground: '#fafafa', cursor: '#2dd4bf', cursorAccent: '#09090b',
+  selectionBackground: 'rgba(45, 212, 191, 0.25)',
+  black: '#3f3f46', red: '#f87171', green: '#4ade80', yellow: '#facc15',
+  blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#fafafa',
+  brightBlack: '#52525b', brightRed: '#fca5a5', brightGreen: '#86efac', brightYellow: '#fde047',
+  brightBlue: '#93c5fd', brightMagenta: '#d8b4fe', brightCyan: '#67e8f9', brightWhite: '#ffffff',
 };
 
 // ============================================
@@ -56,10 +56,10 @@ function persistWorkspaces() {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   S.ws = new WebSocket(`${proto}//${location.host}`);
-  S.ws.onopen = () => { S.connected = true; updateConn(); S.ws.send(JSON.stringify({ type: 'terminal:list' })); };
+  S.ws.onopen = () => { S.connected = true; S.ws.send(JSON.stringify({ type: 'terminal:list' })); };
   S.ws.onmessage = (e) => { try { handleMsg(JSON.parse(e.data)); } catch (err) { console.error(err); } };
-  S.ws.onclose = () => { S.connected = false; updateConn(); setTimeout(connectWs, 2000); };
-  S.ws.onerror = () => { S.connected = false; updateConn(); };
+  S.ws.onclose = () => { S.connected = false; setTimeout(connectWs, 2000); };
+  S.ws.onerror = () => { S.connected = false; };
 }
 
 function send(type, payload) {
@@ -90,8 +90,8 @@ function handleMsg(msg) {
 function createXterm(id) {
   const isMac = navigator.platform?.includes('Mac') || navigator.userAgent?.includes('Mac');
   const xterm = new Terminal({
-    fontFamily: "'SF Mono','Menlo','Monaco','Cascadia Code','Consolas',monospace",
-    fontSize: 13, lineHeight: 1.2, cursorBlink: true, cursorStyle: 'bar',
+    fontFamily: "'JetBrains Mono','SF Mono','Menlo','Cascadia Code','Consolas',monospace",
+    fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
     theme: xtermTheme, allowProposedApi: true,
     macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
@@ -529,7 +529,9 @@ function showWorkspaceDialog() {
   const d = document.getElementById('ws-dialog');
   document.getElementById('ws-name').value = '';
   document.querySelector('input[name="ws-type"][value="local"]').checked = true;
+  document.getElementById('ws-local-fields').classList.remove('hidden');
   document.getElementById('ws-ssh-fields').classList.add('hidden');
+  document.getElementById('ws-cwd').value = '';
   document.getElementById('ws-ssh-target').value = '';
   document.getElementById('ws-remote-cwd').value = '';
   // Load SSH hosts
@@ -770,6 +772,24 @@ function updateSidebar() {
     li.appendChild(ub); ll.appendChild(li);
   }
   if (!links.length) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No linked terminals'; ll.appendChild(e); }
+
+  // Workspace info panel
+  const info = document.getElementById('ws-info');
+  info.innerHTML = '';
+  if (ws) {
+    const isRemote = ws.type === 'remote' || !!ws.sshTarget;
+    const addRow = (label, value) => {
+      if (!value) return;
+      const row = document.createElement('div'); row.className = 'ws-info-row';
+      row.innerHTML = `<span class="ws-info-label">${label}</span><span class="ws-info-value">${value}</span>`;
+      info.appendChild(row);
+    };
+    addRow('Type', isRemote ? 'Remote (SSH)' : 'Local');
+    if (isRemote) addRow('Host', ws.sshTarget);
+    if (isRemote && ws.remoteCwd) addRow('Dir', ws.remoteCwd);
+    if (!isRemote && ws.cwd) addRow('Dir', ws.cwd);
+    addRow('Terminals', String(ws.terminalIds.length));
+  }
 }
 
 // ============================================
@@ -807,10 +827,6 @@ function showNotif(text, type = 'attention') {
   c.appendChild(el); setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 300); }, 3000);
 }
 
-function updateConn() {
-  const dot = document.getElementById('status-dot'), txt = document.getElementById('status-text');
-  dot.classList.toggle('connected', S.connected); txt.textContent = S.connected ? 'Connected' : 'Disconnected';
-}
 
 function fitAll() {
   const ws = activeWs();
@@ -916,7 +932,7 @@ function setupUI() {
     document.getElementById('create-dialog').close();
   });
   document.getElementById('create-cancel').addEventListener('click', () => document.getElementById('create-dialog').close());
-  document.getElementById('create-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('create-confirm').click(); });
+  document.getElementById('create-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('create-confirm').click(); } });
 
   // Edit terminal dialog
   document.getElementById('edit-confirm').addEventListener('click', () => {
@@ -958,7 +974,7 @@ function setupUI() {
   });
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
   // ws-cwd browse is set up above
-  document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('ws-confirm').click(); });
+  document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('ws-confirm').click(); } });
 
   // Browse buttons for directory selection
   document.getElementById('create-cwd-browse').addEventListener('click', () => browseFolder('create-cwd'));
