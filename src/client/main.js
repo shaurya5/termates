@@ -976,30 +976,12 @@ function setupUI() {
     document.getElementById('ws-dialog').close();
   });
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
-  document.getElementById('ws-cwd-browse').addEventListener('click', () => {
-    const picker = document.getElementById('ws-cwd-picker');
-    picker.classList.toggle('hidden');
-    if (!picker.classList.contains('hidden')) {
-      loadDirectory(picker, document.getElementById('ws-cwd').value || '', (p) => {
-        document.getElementById('ws-cwd').value = p;
-        picker.classList.add('hidden');
-      });
-    }
-  });
+  // ws-cwd autocomplete is set up above via setupPathAutocomplete
   document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('ws-confirm').click(); });
 
-  // Directory browse button
-  document.getElementById('create-cwd-browse').addEventListener('click', () => {
-    const picker = document.getElementById('create-cwd-picker');
-    picker.classList.toggle('hidden');
-    if (!picker.classList.contains('hidden')) {
-      const current = document.getElementById('create-cwd').value || '';
-      loadDirectory(picker, current || '', (path) => {
-        document.getElementById('create-cwd').value = path;
-        picker.classList.add('hidden');
-      });
-    }
-  });
+  // Path autocomplete for directory inputs
+  setupPathAutocomplete('create-cwd', 'create-cwd-results');
+  setupPathAutocomplete('ws-cwd', 'ws-cwd-results');
 
   // Browser panel
   document.getElementById('btn-add-browser-tab').addEventListener('click', () => addBrowserTab());
@@ -1025,50 +1007,77 @@ function setupUI() {
 }
 
 // ============================================
-// Directory Browser
+// Path Autocomplete
 // ============================================
-async function loadDirectory(picker, dirPath, onSelect) {
-  try {
-    const res = await fetch(`/api/browse?path=${encodeURIComponent(dirPath)}`);
-    const { current, parent, dirs, error } = await res.json();
-    picker.innerHTML = '';
-    // Current path display
-    const pathEl = document.createElement('div');
-    pathEl.className = 'dir-picker-path';
-    pathEl.textContent = current;
-    picker.appendChild(pathEl);
-    // Select current directory button
-    const selectBtn = document.createElement('div');
-    selectBtn.className = 'dir-picker-item';
-    selectBtn.style.fontWeight = '600';
-    selectBtn.style.color = 'var(--accent)';
-    selectBtn.textContent = 'Select this directory';
-    selectBtn.addEventListener('click', () => onSelect(current));
-    picker.appendChild(selectBtn);
-    // Parent directory
-    if (parent && parent !== current) {
-      const parentEl = document.createElement('div');
-      parentEl.className = 'dir-picker-item parent';
-      parentEl.textContent = '.. (parent)';
-      parentEl.addEventListener('click', () => loadDirectory(picker, parent, onSelect));
-      picker.appendChild(parentEl);
+function setupPathAutocomplete(inputId, resultsId) {
+  const input = document.getElementById(inputId);
+  const results = document.getElementById(resultsId);
+  let debounce = null;
+  let selectedIdx = -1;
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => fetchResults(input.value), 150);
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value) fetchResults(input.value);
+    else fetchResults('~');
+  });
+
+  input.addEventListener('blur', () => {
+    // Delay hide so click on result registers
+    setTimeout(() => results.classList.add('hidden'), 200);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    const items = results.querySelectorAll('.path-result-item');
+    if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, items.length - 1); highlightItem(items); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); highlightItem(items); }
+    else if (e.key === 'Enter' && selectedIdx >= 0 && items[selectedIdx]) {
+      e.preventDefault();
+      input.value = items[selectedIdx].dataset.path;
+      results.classList.add('hidden');
+      selectedIdx = -1;
     }
-    // Child directories
-    for (const d of dirs) {
-      const el = document.createElement('div');
-      el.className = 'dir-picker-item';
-      el.textContent = d.name;
-      el.addEventListener('click', () => loadDirectory(picker, d.path, onSelect));
-      picker.appendChild(el);
+    else if (e.key === 'Tab' && items.length > 0) {
+      e.preventDefault();
+      const item = items[selectedIdx >= 0 ? selectedIdx : 0];
+      input.value = item.dataset.path + '/';
+      fetchResults(input.value);
     }
-    if (error) {
-      const errEl = document.createElement('div');
-      errEl.className = 'dir-picker-item';
-      errEl.style.color = 'var(--error)';
-      errEl.textContent = error;
-      picker.appendChild(errEl);
-    }
-  } catch (e) { picker.innerHTML = '<div class="dir-picker-item" style="color:var(--error)">Failed to load</div>'; }
+    else if (e.key === 'Escape') { results.classList.add('hidden'); }
+  });
+
+  function highlightItem(items) {
+    items.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
+    if (items[selectedIdx]) items[selectedIdx].scrollIntoView({ block: 'nearest' });
+  }
+
+  async function fetchResults(query) {
+    if (!query) { results.classList.add('hidden'); return; }
+    try {
+      const res = await fetch(`/api/browse?path=${encodeURIComponent(query)}`);
+      const { current, dirs } = await res.json();
+      results.innerHTML = '';
+      selectedIdx = -1;
+      if (!dirs.length) { results.classList.add('hidden'); return; }
+      for (const d of dirs) {
+        const el = document.createElement('div');
+        el.className = 'path-result-item';
+        el.dataset.path = d.path;
+        el.innerHTML = `<span class="path-name">${d.name}</span><span class="path-dir">${current}</span>`;
+        el.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          input.value = d.path;
+          results.classList.add('hidden');
+        });
+        results.appendChild(el);
+      }
+      results.classList.remove('hidden');
+    } catch (e) { results.classList.add('hidden'); }
+  }
 }
 
 // ============================================

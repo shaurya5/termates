@@ -1147,15 +1147,6 @@ dialog::backdrop {
   background: rgba(248, 81, 73, 0.15);
 }
 
-.input-with-btn {
-  display: flex;
-  gap: 6px;
-}
-
-.input-with-btn input { flex: 1; }
-
-.btn-sm { padding: 4px 8px; font-size: 11px; }
-
 .radio-group {
   display: flex;
   gap: 16px;
@@ -1174,27 +1165,30 @@ dialog::backdrop {
   accent-color: var(--accent);
 }
 
-/* Directory Picker */
-.dir-picker {
-  max-height: 180px;
+/* Path Autocomplete */
+.path-autocomplete {
+  position: relative;
+}
+
+.path-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   background: var(--bg-primary);
-  margin-top: 4px;
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 
-.dir-picker-path {
-  padding: 4px 8px;
-  font-size: 10px;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-}
-
-.dir-picker-item {
-  padding: 4px 8px;
+.path-result-item {
+  padding: 6px 10px;
   font-size: 12px;
+  font-family: var(--font-mono);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
@@ -1203,8 +1197,21 @@ dialog::backdrop {
   transition: background 0.1s;
 }
 
-.dir-picker-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-.dir-picker-item.parent { color: var(--text-muted); font-style: italic; }
+.path-result-item:hover,
+.path-result-item.selected {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.path-result-item .path-name {
+  color: var(--text-primary);
+}
+
+.path-result-item .path-dir {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-left: auto;
+}
 
 /* Workspace type indicator in tab */
 .ws-tab .ws-remote-dot {

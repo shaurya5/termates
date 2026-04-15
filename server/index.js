@@ -392,16 +392,28 @@ app.get('/api/ssh/hosts', (req, res) => {
 
 // Directory listing for browse dialog
 app.get('/api/browse', (req, res) => {
-  const dir = req.query.path || os.homedir();
+  let dir = req.query.path || os.homedir();
+  // Expand ~ to home directory
+  if (dir.startsWith('~')) dir = dir.replace('~', os.homedir());
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const dirs = entries
+    // If the path is a partial name (user is typing), list the parent and filter
+    let searchDir = dir;
+    let filter = '';
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      searchDir = path.dirname(dir);
+      filter = path.basename(dir).toLowerCase();
+    }
+    const entries = fs.readdirSync(searchDir, { withFileTypes: true });
+    let dirs = entries
       .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({ name: e.name, path: path.join(dir, e.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    res.json({ current: dir, parent: path.dirname(dir), dirs });
+      .map(e => ({ name: e.name, path: path.join(searchDir, e.name) }));
+    if (filter) {
+      dirs = dirs.filter(d => d.name.toLowerCase().includes(filter));
+    }
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ current: searchDir, dirs: dirs.slice(0, 20) });
   } catch (e) {
-    res.json({ current: dir, parent: path.dirname(dir), dirs: [], error: e.message });
+    res.json({ current: dir, dirs: [], error: e.message });
   }
 });
 

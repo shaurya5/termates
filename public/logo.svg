@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#050505" />
+      <stop offset="100%" stop-color="#121212" />
+    </linearGradient>
+
+    <!-- Glowing Orbs Gradients for the "Vibe" aesthetic -->
+    <radialGradient id="glow1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glow2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#ec4899" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glow3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#14b8a6" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Gradient for the Cursor -->
+    <linearGradient id="cursorGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+
+    <!-- Subtle sheen for the Prompt -->
+    <linearGradient id="promptGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#94a3b8" />
+    </linearGradient>
+
+    <!-- Symbol Drop Shadow -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Base Canvas -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+
+  <!-- Ambient Glowing Orbs -->
+  <circle cx="120" cy="120" r="200" fill="url(#glow1)" />
+  <circle cx="400" cy="400" r="220" fill="url(#glow2)" />
+  <circle cx="380" cy="140" r="180" fill="url(#glow3)" />
+
+  <!-- Glassmorphism Container (Terminal Window) -->
+  <rect x="80" y="116" width="352" height="280" rx="32" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2" />
+
+  <!-- Subtle code lines behind the prompt to establish context -->
+  <g fill="#ffffff" fill-opacity="0.06">
+    <!-- Top lines -->
+    <rect x="112" y="148" width="60" height="8" rx="4" />
+    <rect x="180" y="148" width="80" height="8" rx="4" />
+    <rect x="268" y="148" width="40" height="8" rx="4" />
+    
+    <rect x="112" y="168" width="100" height="8" rx="4" />
+    <rect x="220" y="168" width="50" height="8" rx="4" />
+    
+    <!-- Bottom lines -->
+    <rect x="112" y="356" width="70" height="8" rx="4" />
+    <rect x="190" y="356" width="120" height="8" rx="4" />
+    
+    <rect x="112" y="376" width="40" height="8" rx="4" />
+  </g>
+
+  <!-- Terminal Symbol ">_" perfectly centered at (256, 256) -->
+  <g filter="url(#shadow)">
+    <!-- Prompt > -->
+    <path d="M 171 200 L 241 256 L 171 312" fill="none" stroke="url(#promptGrad)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" />
+    <!-- Cursor _ -->
+    <path d="M 271 312 L 341 312" fill="none" stroke="url(#cursorGrad)" stroke-width="32" stroke-linecap="round" />
+  </g>
+</svg>
