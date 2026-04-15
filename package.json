@@ -51,6 +51,7 @@
     "files": [
       "electron/**/*",
       "server/**/*",
+      "shared/**/*",
       "public/**/*",
       "bin/**/*",
       "node_modules/**/*",
