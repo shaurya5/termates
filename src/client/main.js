@@ -1017,62 +1017,80 @@ function setupPathAutocomplete(inputId, resultsId) {
 
   input.addEventListener('input', () => {
     clearTimeout(debounce);
-    debounce = setTimeout(() => fetchResults(input.value), 150);
+    debounce = setTimeout(() => fetchResults(input.value), 200);
   });
 
   input.addEventListener('focus', () => {
-    if (input.value) fetchResults(input.value);
-    else fetchResults('~');
+    // Show home directory contents on focus
+    fetchResults(input.value || '');
   });
 
   input.addEventListener('blur', () => {
-    // Delay hide so click on result registers
-    setTimeout(() => results.classList.add('hidden'), 200);
+    setTimeout(() => results.classList.add('hidden'), 250);
   });
 
   input.addEventListener('keydown', (e) => {
     e.stopPropagation();
     const items = results.querySelectorAll('.path-result-item');
-    if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, items.length - 1); highlightItem(items); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); highlightItem(items); }
-    else if (e.key === 'Enter' && selectedIdx >= 0 && items[selectedIdx]) {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
-      input.value = items[selectedIdx].dataset.path;
-      results.classList.add('hidden');
-      selectedIdx = -1;
-    }
-    else if (e.key === 'Tab' && items.length > 0) {
+      selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+      highlight(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selectedIdx = Math.max(selectedIdx - 1, -1);
+      highlight(items);
+    } else if (e.key === 'Enter') {
+      if (selectedIdx >= 0 && items[selectedIdx]) {
+        e.preventDefault();
+        selectItem(items[selectedIdx].dataset.path);
+      }
+    } else if (e.key === 'Tab' && items.length > 0) {
       e.preventDefault();
       const item = items[selectedIdx >= 0 ? selectedIdx : 0];
       input.value = item.dataset.path + '/';
+      selectedIdx = -1;
       fetchResults(input.value);
+    } else if (e.key === 'Escape') {
+      results.classList.add('hidden');
     }
-    else if (e.key === 'Escape') { results.classList.add('hidden'); }
   });
 
-  function highlightItem(items) {
+  function selectItem(p) {
+    input.value = p;
+    results.classList.add('hidden');
+    selectedIdx = -1;
+  }
+
+  function highlight(items) {
     items.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
-    if (items[selectedIdx]) items[selectedIdx].scrollIntoView({ block: 'nearest' });
+    if (selectedIdx >= 0 && items[selectedIdx]) items[selectedIdx].scrollIntoView({ block: 'nearest' });
   }
 
   async function fetchResults(query) {
-    if (!query) { results.classList.add('hidden'); return; }
     try {
       const res = await fetch(`/api/browse?path=${encodeURIComponent(query)}`);
       const { current, dirs } = await res.json();
       results.innerHTML = '';
       selectedIdx = -1;
-      if (!dirs.length) { results.classList.add('hidden'); return; }
+
+      if (!dirs.length) {
+        const empty = document.createElement('div');
+        empty.className = 'path-result-item';
+        empty.style.color = 'var(--text-muted)';
+        empty.textContent = query ? 'No matching directories' : 'Type a path or folder name';
+        results.appendChild(empty);
+        results.classList.remove('hidden');
+        return;
+      }
+
       for (const d of dirs) {
         const el = document.createElement('div');
         el.className = 'path-result-item';
         el.dataset.path = d.path;
-        el.innerHTML = `<span class="path-name">${d.name}</span><span class="path-dir">${current}</span>`;
-        el.addEventListener('mousedown', (e) => {
-          e.preventDefault();
-          input.value = d.path;
-          results.classList.add('hidden');
-        });
+        const shortPath = d.path.replace(new RegExp('^' + current + '/?'), '');
+        el.innerHTML = `<span class="path-name">${d.name}/</span><span class="path-dir">${d.path}</span>`;
+        el.addEventListener('mousedown', (e) => { e.preventDefault(); selectItem(d.path); });
         results.appendChild(el);
       }
       results.classList.remove('hidden');

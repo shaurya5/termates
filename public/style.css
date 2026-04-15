@@ -1205,12 +1205,19 @@ dialog::backdrop {
 
 .path-result-item .path-name {
   color: var(--text-primary);
+  flex-shrink: 0;
 }
 
 .path-result-item .path-dir {
   color: var(--text-muted);
   font-size: 10px;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: right;
+  max-width: 60%;
 }
 
 /* Workspace type indicator in tab */

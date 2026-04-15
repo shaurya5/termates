@@ -392,30 +392,73 @@ app.get('/api/ssh/hosts', (req, res) => {
 
 // Directory listing for browse dialog
 app.get('/api/browse', (req, res) => {
-  let dir = req.query.path || os.homedir();
-  // Expand ~ to home directory
-  if (dir.startsWith('~')) dir = dir.replace('~', os.homedir());
+  let query = (req.query.path || '').trim();
+  const home = os.homedir();
+
+  // Expand ~
+  if (query.startsWith('~')) query = query.replace(/^~/, home);
+
+  // If empty, list home directory
+  if (!query) {
+    return listDir(home, '', res);
+  }
+  // Bare word (no / prefix) — search home + common subdirectories
+  if (!query.startsWith('/')) {
+    const filter = query.toLowerCase();
+    const searchDirs = [home];
+    // Add common project directories
+    for (const sub of ['projects', 'Developer', 'Documents', 'Desktop', 'repos', 'code', 'workspace', 'src', 'work']) {
+      const p = path.join(home, sub);
+      try { if (fs.existsSync(p) && fs.statSync(p).isDirectory()) searchDirs.push(p); } catch (e) {}
+    }
+    const allResults = [];
+    const seen = new Set();
+    for (const dir of searchDirs) {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const e of entries) {
+          if (!e.isDirectory() || e.name.startsWith('.')) continue;
+          if (e.name.toLowerCase().includes(filter)) {
+            const full = path.join(dir, e.name);
+            if (!seen.has(full)) { seen.add(full); allResults.push({ name: e.name, path: full }); }
+          }
+        }
+      } catch (e) {}
+    }
+    allResults.sort((a, b) => a.name.localeCompare(b.name));
+    return res.json({ current: home, dirs: allResults.slice(0, 25) });
+  }
+
+  // Absolute path: if it's a valid directory, list its children
   try {
-    // If the path is a partial name (user is typing), list the parent and filter
-    let searchDir = dir;
-    let filter = '';
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-      searchDir = path.dirname(dir);
-      filter = path.basename(dir).toLowerCase();
+    if (fs.existsSync(query) && fs.statSync(query).isDirectory()) {
+      return listDir(query, '', res);
     }
-    const entries = fs.readdirSync(searchDir, { withFileTypes: true });
+  } catch (e) {}
+
+  // Partial path: /Users/shauryag/proj → search /Users/shauryag for "proj"
+  const parentDir = path.dirname(query);
+  const filter = path.basename(query).toLowerCase();
+  return listDir(parentDir, filter, res);
+});
+
+function listDir(dir, filter, res) {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
     let dirs = entries
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({ name: e.name, path: path.join(searchDir, e.name) }));
-    if (filter) {
-      dirs = dirs.filter(d => d.name.toLowerCase().includes(filter));
-    }
-    dirs.sort((a, b) => a.name.localeCompare(b.name));
-    res.json({ current: searchDir, dirs: dirs.slice(0, 20) });
+      .filter(e => {
+        if (!e.isDirectory()) return false;
+        if (e.name.startsWith('.')) return false;
+        if (filter) return e.name.toLowerCase().includes(filter);
+        return true;
+      })
+      .map(e => ({ name: e.name, path: path.join(dir, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ current: dir, dirs: dirs.slice(0, 25) });
   } catch (e) {
     res.json({ current: dir, dirs: [], error: e.message });
   }
-});
+}
 
 // --- Update API (reads state from Electron's global, or checks GitHub directly) ---
 app.get('/api/update/status', async (req, res) => {
