@@ -14,15 +14,18 @@ export class StateManager {
 
   _default() {
     return {
-      version: 1,
-      terminals: [],       // [{ id, name, role, status, tmuxSession }]
-      links: [],           // [{ from, to }]
-      layout: null,        // layout tree (JSON)
-      browserTabs: [],     // [{ id, url, title }]
+      version: 2,
+      workspaces: [
+        { id: 'w1', name: 'Workspace 1', terminalIds: [], links: [], layout: null },
+      ],
+      activeWorkspaceId: 'w1',
+      nextWorkspaceId: 2,
+      terminals: [],
+      nextTerminalId: 1,
+      browserTabs: [],
       activeBrowserTab: 0,
       browserOpen: false,
       browserWidth: 0.35,
-      nextTerminalId: 1,
       nextBrowserTabId: 1,
     };
   }
@@ -38,7 +41,24 @@ export class StateManager {
       if (fs.existsSync(STATE_FILE)) {
         const raw = fs.readFileSync(STATE_FILE, 'utf-8');
         const data = JSON.parse(raw);
-        this.state = { ...this._default(), ...data };
+        // Migrate v1 state to v2 (workspaces)
+        if (!data.workspaces) {
+          const migrated = this._default();
+          migrated.terminals = data.terminals || [];
+          migrated.nextTerminalId = data.nextTerminalId || 1;
+          migrated.browserTabs = data.browserTabs || [];
+          migrated.activeBrowserTab = data.activeBrowserTab || 0;
+          migrated.browserOpen = data.browserOpen || false;
+          migrated.browserWidth = data.browserWidth || 0.35;
+          migrated.nextBrowserTabId = data.nextBrowserTabId || 1;
+          // Put all existing terminals into workspace 1
+          migrated.workspaces[0].terminalIds = (data.terminals || []).map(t => t.id);
+          migrated.workspaces[0].links = data.links || [];
+          migrated.workspaces[0].layout = data.layout || null;
+          this.state = migrated;
+        } else {
+          this.state = { ...this._default(), ...data };
+        }
         return true;
       }
     } catch (e) {
@@ -48,13 +68,11 @@ export class StateManager {
     return false;
   }
 
-  // Debounced save
   save() {
     if (this._saveTimer) clearTimeout(this._saveTimer);
     this._saveTimer = setTimeout(() => this._doSave(), 300);
   }
 
-  // Immediate save (for shutdown)
   saveNow() {
     if (this._saveTimer) clearTimeout(this._saveTimer);
     this._doSave();
@@ -69,11 +87,9 @@ export class StateManager {
     }
   }
 
-  get() {
-    return this.state;
-  }
+  get() { return this.state; }
 
-  // Terminal state
+  // --- Terminals ---
   setTerminals(terminals) {
     this.state.terminals = terminals.map(t => ({
       id: t.id, name: t.name, role: t.role, status: t.status,
@@ -82,46 +98,26 @@ export class StateManager {
     this.save();
   }
 
-  setNextTerminalId(id) {
-    this.state.nextTerminalId = id;
-    this.save();
+  setNextTerminalId(id) { this.state.nextTerminalId = id; this.save(); }
+
+  // --- Workspaces ---
+  setWorkspaces(workspaces) { this.state.workspaces = workspaces; this.save(); }
+  setActiveWorkspaceId(id) { this.state.activeWorkspaceId = id; this.save(); }
+  setNextWorkspaceId(id) { this.state.nextWorkspaceId = id; this.save(); }
+
+  getWorkspace(id) {
+    return this.state.workspaces.find(w => w.id === id) || null;
   }
 
-  // Links
-  setLinks(links) {
-    this.state.links = links.map(l => ({ from: l.from, to: l.to }));
-    this.save();
+  updateWorkspace(id, updates) {
+    const ws = this.state.workspaces.find(w => w.id === id);
+    if (ws) { Object.assign(ws, updates); this.save(); }
   }
 
-  // Layout
-  setLayout(layout) {
-    this.state.layout = layout;
-    this.save();
-  }
-
-  // Browser
-  setBrowserTabs(tabs) {
-    this.state.browserTabs = tabs;
-    this.save();
-  }
-
-  setBrowserOpen(open) {
-    this.state.browserOpen = open;
-    this.save();
-  }
-
-  setBrowserWidth(width) {
-    this.state.browserWidth = width;
-    this.save();
-  }
-
-  setActiveBrowserTab(index) {
-    this.state.activeBrowserTab = index;
-    this.save();
-  }
-
-  setNextBrowserTabId(id) {
-    this.state.nextBrowserTabId = id;
-    this.save();
-  }
+  // --- Browser ---
+  setBrowserTabs(tabs) { this.state.browserTabs = tabs; this.save(); }
+  setBrowserOpen(open) { this.state.browserOpen = open; this.save(); }
+  setBrowserWidth(width) { this.state.browserWidth = width; this.save(); }
+  setActiveBrowserTab(index) { this.state.activeBrowserTab = index; this.save(); }
+  setNextBrowserTabId(id) { this.state.nextBrowserTabId = id; this.save(); }
 }

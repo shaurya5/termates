@@ -10,7 +10,6 @@
 </head>
 <body>
   <div id="app">
-    <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
         <div class="logo">
@@ -19,6 +18,23 @@
         </div>
       </div>
 
+      <!-- Workspace Tabs -->
+      <div class="sidebar-section ws-section">
+        <div class="section-header">
+          <span class="section-title">Workspaces</span>
+          <div class="section-actions">
+            <button id="btn-new-workspace" class="icon-btn" title="New Workspace (Ctrl+Shift+N)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <button id="btn-delete-workspace" class="icon-btn" title="Delete Workspace">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="workspace-tabs" class="ws-tabs"></div>
+      </div>
+
+      <!-- Terminals in active workspace -->
       <div class="sidebar-section">
         <div class="section-header">
           <span class="section-title">Terminals</span>
@@ -35,7 +51,7 @@
         <div class="section-header">
           <span class="section-title">Links</span>
           <div class="section-actions">
-            <button id="btn-link-mode" class="icon-btn" title="Link Mode: click two terminals to connect them">
+            <button id="btn-link-mode" class="icon-btn" title="Link terminals">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             </button>
           </div>
@@ -52,7 +68,6 @@
       </div>
     </aside>
 
-    <!-- Main Content Area -->
     <main id="main-content">
       <div id="toolbar">
         <div class="toolbar-left">
@@ -65,12 +80,7 @@
             <span>Split V</span>
           </button>
           <div class="toolbar-separator"></div>
-          <button id="btn-send-linked" class="toolbar-btn" title="Send to linked terminal">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-            <span>Send to Linked</span>
-          </button>
-          <div class="toolbar-separator"></div>
-          <button id="btn-toggle-browser" class="toolbar-btn" title="Toggle Browser Panel (Ctrl+Shift+B)">
+          <button id="btn-toggle-browser" class="toolbar-btn" title="Toggle Browser (Ctrl+Shift+B)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
             <span>Browser</span>
           </button>
@@ -80,7 +90,6 @@
         </div>
       </div>
 
-      <!-- Workspace: terminals + browser side-by-side -->
       <div id="workspace">
         <div id="terminal-area">
           <div id="layout-root"></div>
@@ -160,7 +169,6 @@
       </div>
     </dialog>
 
-    <!-- Edit Terminal Dialog -->
     <dialog id="edit-dialog">
       <div class="dialog-header">Configure Terminal</div>
       <div class="dialog-body">

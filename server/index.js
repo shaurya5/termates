@@ -33,7 +33,6 @@ const stateManager = new StateManager();
 // --- State persistence helpers ---
 function persistState() {
   stateManager.setTerminals(ptyManager.list());
-  stateManager.setLinks(linkManager.listAll());
   stateManager.setNextTerminalId(ptyManager.nextId);
 }
 
@@ -70,10 +69,12 @@ function restoreSession() {
     }
   }
 
-  // Restore links (only for terminals that exist)
-  for (const link of (saved.links || [])) {
-    if (ptyManager.get(link.from) && ptyManager.get(link.to)) {
-      linkManager.link(link.from, link.to);
+  // Restore links per workspace
+  for (const ws of (saved.workspaces || [])) {
+    for (const link of (ws.links || [])) {
+      if (ptyManager.get(link.from) && ptyManager.get(link.to)) {
+        linkManager.link(link.from, link.to);
+      }
     }
   }
 
@@ -212,8 +213,9 @@ function handleWsMessage(ws, msg) {
         type: 'terminal:list',
         payload: {
           terminals: ptyManager.list(),
-          links: linkManager.listAll(),
-          layout: saved.layout,
+          workspaces: saved.workspaces || [],
+          activeWorkspaceId: saved.activeWorkspaceId || 'w1',
+          nextWorkspaceId: saved.nextWorkspaceId || 2,
           browserTabs: saved.browserTabs || [],
           activeBrowserTab: saved.activeBrowserTab || 0,
           browserOpen: saved.browserOpen || false,
@@ -223,9 +225,11 @@ function handleWsMessage(ws, msg) {
       break;
     }
 
-    // --- Layout sync (frontend tells server about layout changes) ---
-    case 'layout:update': {
-      stateManager.setLayout(payload.layout);
+    // --- Workspace sync ---
+    case 'workspace:update': {
+      stateManager.setWorkspaces(payload.workspaces);
+      if (payload.activeWorkspaceId !== undefined) stateManager.setActiveWorkspaceId(payload.activeWorkspaceId);
+      if (payload.nextWorkspaceId !== undefined) stateManager.setNextWorkspaceId(payload.nextWorkspaceId);
       break;
     }
 

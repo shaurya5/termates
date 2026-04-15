@@ -8,15 +8,17 @@ import { WebLinksAddon } from 'xterm-addon-web-links';
 const S = {
   ws: null,
   connected: false,
-  terminals: new Map(),
-  links: [],
+  terminals: new Map(),       // ALL terminals across workspaces
   activeTerminalId: null,
   linkMode: false,
   linkSource: null,
-  layout: null,
-  // Browser (right-side panel)
+  // Workspaces
+  workspaces: [],             // [{ id, name, terminalIds, links, layout }]
+  activeWorkspaceId: null,
+  nextWorkspaceId: 2,
+  // Browser
   browserOpen: false,
-  browserTabs: [],     // [{ id, url, title }]
+  browserTabs: [],
   activeBrowserTab: 0,
   browserWidth: 0.35,
   nextBrowserTabId: 1,
@@ -30,6 +32,21 @@ const xtermTheme = {
   brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
   brightBlue: '#79b8ff', brightMagenta: '#d2a8ff', brightCyan: '#76e3ea', brightWhite: '#f0f6fc',
 };
+
+// ============================================
+// Workspace Helpers
+// ============================================
+function activeWs() { return S.workspaces.find(w => w.id === S.activeWorkspaceId) || null; }
+function wsTerminals(ws) { return (ws?.terminalIds || []).map(id => S.terminals.get(id)).filter(Boolean); }
+function wsLinks(ws) { return ws?.links || []; }
+
+function persistWorkspaces() {
+  send('workspace:update', {
+    workspaces: S.workspaces,
+    activeWorkspaceId: S.activeWorkspaceId,
+    nextWorkspaceId: S.nextWorkspaceId,
+  });
+}
 
 // ============================================
 // WebSocket
@@ -55,13 +72,12 @@ function handleMsg(msg) {
     case 'terminal:created': onCreated(msg.payload); break;
     case 'terminal:output': onOutput(msg.payload); break;
     case 'terminal:destroyed': onDestroyed(msg.payload); break;
-    case 'terminal:renamed': onRenamed(msg.payload); break;
     case 'terminal:configured': onConfigured(msg.payload); break;
+    case 'terminal:renamed': onConfigured(msg.payload); break;
     case 'terminal:linked': onLinked(msg.payload); break;
     case 'terminal:unlinked': onUnlinked(msg.payload); break;
     case 'terminal:status-changed': onStatusChanged(msg.payload); break;
     case 'terminal:notification': onNotif(msg.payload); break;
-    case 'terminal:message-sent': onMsgSent(msg.payload); break;
     case 'terminal:list': onList(msg.payload); break;
   }
 }
@@ -79,10 +95,6 @@ function createXterm(id) {
   xterm.loadAddon(fitAddon);
   xterm.loadAddon(new WebLinksAddon());
   xterm.onData((data) => {
-    // Filter DA queries AND responses that cause garbled output with tmux.
-    // tmux queries xterm.js (\x1b[c), xterm.js responds (\x1b[?1;2c),
-    // and that response leaks into zsh as keyboard input.
-    // Matches: \x1b[c, \x1b[>c, \x1b[?1;2c, \x1b[>0;276;0c, etc.
     const filtered = data.replace(/\x1b\[[\?>]?[\d;]*c/g, '');
     if (filtered) send('terminal:input', { id, data: filtered });
   });
@@ -92,9 +104,14 @@ function createXterm(id) {
 function onCreated({ id, name, role, status }) {
   if (S.terminals.has(id)) return;
   const { xterm, fitAddon } = createXterm(id);
-  const td = { id, name, role, status: status || 'idle', xterm, fitAddon };
-  S.terminals.set(id, td);
-  addTerminalToLayout(id);
+  S.terminals.set(id, { id, name, role, status: status || 'idle', xterm, fitAddon });
+  // Add to active workspace
+  const ws = activeWs();
+  if (ws && !ws.terminalIds.includes(id)) {
+    ws.terminalIds.push(id);
+    addTerminalToLayout(id, ws);
+    persistWorkspaces();
+  }
   updateSidebar();
   setActive(id);
 }
@@ -106,10 +123,18 @@ function onDestroyed({ id }) {
   if (!t) return;
   t.xterm.dispose();
   S.terminals.delete(id);
-  removeFromLayout(id);
+  // Remove from all workspaces
+  for (const ws of S.workspaces) {
+    ws.terminalIds = ws.terminalIds.filter(tid => tid !== id);
+    ws.links = ws.links.filter(l => l.from !== id && l.to !== id);
+    ws.layout = removeFromLayoutTree(ws.layout, id);
+  }
+  persistWorkspaces();
+  if (S.activeWorkspaceId) renderLayout();
   updateSidebar();
   if (S.activeTerminalId === id) {
-    const first = S.terminals.keys().next().value;
+    const ws = activeWs();
+    const first = ws?.terminalIds[0];
     setActive(first || null);
   }
 }
@@ -120,24 +145,25 @@ function onConfigured({ id, name, role }) {
     if (name !== undefined) t.name = name;
     if (role !== undefined) t.role = role;
     updateSidebar();
-    // Re-render the layout to update panel headers with new name/role
     renderLayout();
   }
 }
 
-function onRenamed({ id, name }) {
-  const t = S.terminals.get(id);
-  if (t) { t.name = name; updateSidebar(); updatePanelHeader(id); }
-}
-
 function onLinked({ from, to }) {
-  if (!S.links.some(l => (l.from === from && l.to === to) || (l.from === to && l.to === from)))
-    S.links.push({ from, to });
+  const ws = activeWs();
+  if (ws && !ws.links.some(l => (l.from === from && l.to === to) || (l.from === to && l.to === from))) {
+    ws.links.push({ from, to });
+    persistWorkspaces();
+  }
   updateSidebar(); updateLinked();
 }
 
 function onUnlinked({ from, to }) {
-  S.links = S.links.filter(l => !((l.from === from && l.to === to) || (l.from === to && l.to === from)));
+  const ws = activeWs();
+  if (ws) {
+    ws.links = ws.links.filter(l => !((l.from === from && l.to === to) || (l.from === to && l.to === from)));
+    persistWorkspaces();
+  }
   updateSidebar(); updateLinked();
 }
 
@@ -151,63 +177,111 @@ function onNotif({ id, status, text }) {
   if (t) { t.status = status; updateSidebar(); updatePanelStatus(id); showNotif(`${t.name}: ${text || status}`, status); }
 }
 
-function onMsgSent({ from, to }) {
-  const f = S.terminals.get(from), t = S.terminals.get(to);
-  if (f && t) showNotif(`${f.name} -> ${t.name}`, 'attention');
-}
-
-function onList({ terminals, links, layout, browserTabs, activeBrowserTab, browserOpen, browserWidth }) {
-  // Restore browser state
+function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, browserTabs, activeBrowserTab, browserOpen, browserWidth }) {
   if (browserTabs?.length) { S.browserTabs = browserTabs; S.activeBrowserTab = activeBrowserTab || 0; }
   if (browserOpen) S.browserOpen = true;
   if (browserWidth) S.browserWidth = browserWidth;
 
+  // Restore workspaces
+  if (workspaces?.length) {
+    S.workspaces = workspaces;
+    S.activeWorkspaceId = activeWorkspaceId || workspaces[0].id;
+    S.nextWorkspaceId = nextWorkspaceId || 2;
+  } else {
+    S.workspaces = [{ id: 'w1', name: 'Workspace 1', terminalIds: [], links: [], layout: null }];
+    S.activeWorkspaceId = 'w1';
+  }
+
   // Restore terminals
   if (terminals?.length && S.terminals.size === 0) {
-    S.links = links || [];
-    const termIds = new Set(terminals.map(t => t.id));
     for (const t of terminals) {
       const { xterm, fitAddon } = createXterm(t.id);
       S.terminals.set(t.id, { id: t.id, name: t.name, role: t.role, status: t.status || 'idle', xterm, fitAddon });
     }
-    // Restore layout: prune any leaves referencing dead terminals, then validate
-    if (layout) {
-      S.layout = pruneLayout(layout, termIds);
+    // Prune workspace layouts and terminalIds to only existing terminals
+    const existingIds = new Set(terminals.map(t => t.id));
+    for (const ws of S.workspaces) {
+      ws.terminalIds = ws.terminalIds.filter(id => existingIds.has(id));
+      ws.layout = pruneLayout(ws.layout, new Set(ws.terminalIds));
+      ws.links = ws.links.filter(l => existingIds.has(l.from) && existingIds.has(l.to));
+      // If layout is empty but terminals exist, auto-build
+      if (!ws.layout && ws.terminalIds.length) {
+        ws.layout = null;
+        for (const tid of ws.terminalIds) ws.layout = addToLayoutTree(ws.layout, tid, 'horizontal');
+      }
+      // Add any terminals not in any workspace to the active one
     }
-    // If layout is empty/null after pruning, or wasn't saved, auto-build from terminal list
-    if (!S.layout) {
-      S.layout = null;
-      for (const t of terminals) addTerminalToLayout(t.id);
-    } else {
-      // Check if any terminals are missing from the layout and add them
-      const layoutIds = collectLayoutIds(S.layout);
-      for (const t of terminals) {
-        if (!layoutIds.has(t.id)) addTerminalToLayout(t.id);
+    // Check for orphaned terminals
+    const assigned = new Set(S.workspaces.flatMap(w => w.terminalIds));
+    const orphans = terminals.filter(t => !assigned.has(t.id));
+    if (orphans.length) {
+      const ws = activeWs();
+      for (const t of orphans) {
+        ws.terminalIds.push(t.id);
+        ws.layout = addToLayoutTree(ws.layout, t.id, 'horizontal');
       }
     }
-    renderLayout();
-    updateSidebar();
-    if (terminals.length) setActive(terminals[0].id);
-
-    // Force tmux to redraw all terminals by cycling a resize.
-    // On page reload, existing tmux sessions have content but the new xterm
-    // instances are empty. A resize forces tmux to repaint the screen.
-    setTimeout(() => {
-      for (const [id, t] of S.terminals) {
-        try {
-          const cols = t.xterm.cols, rows = t.xterm.rows;
-          send('terminal:resize', { id, cols: Math.max(1, cols - 1), rows });
-          setTimeout(() => send('terminal:resize', { id, cols, rows }), 100);
-        } catch (e) {}
-      }
-    }, 300);
   }
-  // Restore browser panel
+
+  renderLayout();
+  updateSidebar();
+  const ws = activeWs();
+  if (ws?.terminalIds.length) setActive(ws.terminalIds[0]);
   if (S.browserOpen) toggleBrowser(true);
   renderBrowserTabs();
+
+  // Force tmux redraw
+  setTimeout(() => {
+    for (const [id, t] of S.terminals) {
+      try {
+        const cols = t.xterm.cols, rows = t.xterm.rows;
+        send('terminal:resize', { id, cols: Math.max(1, cols - 1), rows });
+        setTimeout(() => send('terminal:resize', { id, cols, rows }), 100);
+      } catch (e) {}
+    }
+  }, 300);
 }
 
-// Remove layout leaves whose panelId is not in the valid set
+// ============================================
+// Layout Tree (pure functions, no side effects on S)
+// ============================================
+function addToLayoutTree(layout, id, direction) {
+  const leaf = { type: 'leaf', panelId: id };
+  if (!layout) return leaf;
+  // Find rightmost/bottommost leaf and split it
+  const targetId = findLeaf(layout);
+  if (!targetId) return leaf;
+  return splitInTree(layout, targetId, direction, leaf);
+}
+
+function splitInTree(tree, targetId, direction, newLeaf) {
+  if (tree.type === 'leaf' && tree.panelId === targetId)
+    return { type: 'split', direction, ratio: 0.5, children: [{ ...tree }, newLeaf] };
+  if (tree.type === 'split')
+    return { ...tree, children: [splitInTree(tree.children[0], targetId, direction, newLeaf), tree.children[1]] };
+  return tree;
+}
+
+function removeFromLayoutTree(layout, id) {
+  if (!layout) return null;
+  if (layout.type === 'leaf') return layout.panelId === id ? null : layout;
+  if (layout.type === 'split') {
+    const l = removeFromLayoutTree(layout.children[0], id);
+    const r = removeFromLayoutTree(layout.children[1], id);
+    if (!l && !r) return null;
+    if (!l) return r;
+    if (!r) return l;
+    return { ...layout, children: [l, r] };
+  }
+  return layout;
+}
+
+function findLeaf(n) {
+  if (!n) return null;
+  if (n.type === 'leaf') return n.panelId;
+  return findLeaf(n.children[0]) || findLeaf(n.children[1]);
+}
+
 function pruneLayout(node, validIds) {
   if (!node) return null;
   if (node.type === 'leaf') return validIds.has(node.panelId) ? node : null;
@@ -222,85 +296,45 @@ function pruneLayout(node, validIds) {
   return null;
 }
 
-// Collect all terminal IDs referenced in the layout tree
 function collectLayoutIds(node) {
   const ids = new Set();
-  (function walk(n) {
-    if (!n) return;
-    if (n.type === 'leaf') ids.add(n.panelId);
-    if (n.type === 'split') { walk(n.children[0]); walk(n.children[1]); }
-  })(node);
+  (function walk(n) { if (!n) return; if (n.type === 'leaf') ids.add(n.panelId); if (n.type === 'split') { walk(n.children[0]); walk(n.children[1]); } })(node);
   return ids;
 }
 
 // ============================================
-// Layout System (terminals only)
+// Layout Rendering
 // ============================================
-function addTerminalToLayout(id) {
-  const leaf = { type: 'leaf', panelId: id };
-  if (!S.layout) { S.layout = leaf; }
-  else {
-    const target = S.activeTerminalId || findLeaf(S.layout);
-    const dir = S._splitDir || 'horizontal';
-    S._splitDir = null;
-    if (target) splitLeaf(target, dir, leaf);
-    else S.layout = leaf;
+function addTerminalToLayout(id, ws) {
+  ws = ws || activeWs();
+  if (!ws) return;
+  const dir = S._splitDir || 'horizontal';
+  S._splitDir = null;
+  const target = S.activeTerminalId && ws.terminalIds.includes(S.activeTerminalId) ? S.activeTerminalId : findLeaf(ws.layout);
+  if (!ws.layout) {
+    ws.layout = { type: 'leaf', panelId: id };
+  } else if (target) {
+    ws.layout = splitInTree(ws.layout, target, dir, { type: 'leaf', panelId: id });
   }
   renderLayout();
-  persistLayout();
-}
-
-function findLeaf(n) {
-  if (!n) return null;
-  if (n.type === 'leaf') return n.panelId;
-  return findLeaf(n.children[0]) || findLeaf(n.children[1]);
-}
-
-function splitLeaf(panelId, direction, newLeaf) {
-  function go(n) {
-    if (n.type === 'leaf' && n.panelId === panelId)
-      return { type: 'split', direction, ratio: 0.5, children: [{ ...n }, newLeaf] };
-    if (n.type === 'split')
-      return { ...n, children: [go(n.children[0]), go(n.children[1])] };
-    return n;
-  }
-  S.layout = go(S.layout);
-}
-
-function removeFromLayout(id) {
-  function go(n) {
-    if (!n) return null;
-    if (n.type === 'leaf') return n.panelId === id ? null : n;
-    if (n.type === 'split') {
-      const l = go(n.children[0]), r = go(n.children[1]);
-      if (!l && !r) return null;
-      if (!l) return r;
-      if (!r) return l;
-      return { ...n, children: [l, r] };
-    }
-    return n;
-  }
-  S.layout = go(S.layout);
-  renderLayout();
-  persistLayout();
-}
-
-function persistLayout() {
-  send('layout:update', { layout: S.layout });
+  persistWorkspaces();
 }
 
 function renderLayout() {
   const root = document.getElementById('layout-root');
   root.innerHTML = '';
-  if (!S.layout) { root.appendChild(createWelcome()); return; }
-  root.appendChild(renderNode(S.layout));
+  const ws = activeWs();
+  if (!ws || !ws.layout) { root.appendChild(createWelcome()); return; }
+  root.appendChild(renderNode(ws.layout));
   requestAnimationFrame(() => {
-    for (const [id, t] of S.terminals) {
-      const c = document.querySelector(`[data-tid="${id}"] .terminal-container`);
+    for (const tid of ws.terminalIds) {
+      const t = S.terminals.get(tid);
+      if (!t) continue;
+      const c = document.querySelector(`[data-tid="${tid}"] .terminal-container`);
       if (c && !c.querySelector('.xterm')) {
         t.xterm.open(c);
         t.fitAddon.fit();
-        send('terminal:resize', { id, cols: t.xterm.cols, rows: t.xterm.rows });
+        send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
       }
     }
     fitAll();
@@ -333,13 +367,12 @@ function renderNode(n) {
 }
 
 function setupResize(handle, node, p1, p2) {
-  let start = 0, startR = 0, size = 0;
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     handle.classList.add('dragging');
-    start = node.direction === 'horizontal' ? e.clientX : e.clientY;
-    startR = node.ratio;
-    size = node.direction === 'horizontal' ? handle.parentElement.offsetWidth : handle.parentElement.offsetHeight;
+    const start = node.direction === 'horizontal' ? e.clientX : e.clientY;
+    const startR = node.ratio;
+    const size = node.direction === 'horizontal' ? handle.parentElement.offsetWidth : handle.parentElement.offsetHeight;
     const move = (e) => {
       const cur = node.direction === 'horizontal' ? e.clientX : e.clientY;
       node.ratio = Math.max(0.1, Math.min(0.9, startR + (cur - start) / size));
@@ -357,7 +390,7 @@ function setupResize(handle, node, p1, p2) {
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
       document.body.style.cursor = ''; document.body.style.userSelect = '';
-      fitAll(); persistLayout();
+      fitAll(); persistWorkspaces();
     };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
@@ -372,11 +405,12 @@ function setupResize(handle, node, p1, p2) {
 function createTermPanel(id) {
   const t = S.terminals.get(id);
   if (!t) return document.createElement('div');
+  const ws = activeWs();
   const panel = document.createElement('div');
   panel.className = 'terminal-panel';
   panel.dataset.tid = id;
   if (t.status !== 'idle') panel.classList.add(`status-${t.status}`);
-  if (isLinked(id)) panel.classList.add('linked');
+  if (ws && isLinked(id, ws)) panel.classList.add('linked');
 
   const hdr = document.createElement('div'); hdr.className = 'panel-header';
   const dot = document.createElement('span'); dot.className = `panel-dot terminal-status-dot ${t.status}`;
@@ -385,15 +419,12 @@ function createTermPanel(id) {
   if (t.role) { const b = document.createElement('span'); b.className = `panel-role terminal-role-badge ${t.role}`; b.textContent = t.role; hdr.appendChild(b); }
 
   const acts = document.createElement('div'); acts.className = 'panel-actions';
-  const mkBtn = (lbl, fn, cls) => { const b = document.createElement('button'); b.className = 'panel-action-btn' + (cls ? ' ' + cls : ''); b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
   const mkSvgBtn = (svg, fn, cls, title) => {
-    const b = document.createElement('button');
-    b.className = 'panel-action-btn' + (cls ? ' ' + cls : '');
-    b.innerHTML = svg;
-    if (title) b.title = title;
-    b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
-    return b;
+    const b = document.createElement('button'); b.className = 'panel-action-btn' + (cls ? ' ' + cls : '');
+    b.innerHTML = svg; if (title) b.title = title;
+    b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b;
   };
+  const mkBtn = (lbl, fn) => { const b = document.createElement('button'); b.className = 'panel-action-btn'; b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>', () => showEditDialog(id), '', 'Configure'));
   acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` })));
   acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }));
@@ -409,12 +440,6 @@ function createTermPanel(id) {
   return panel;
 }
 
-function updatePanelHeader(id) {
-  const t = S.terminals.get(id);
-  const el = document.querySelector(`[data-tid="${id}"] .panel-name`);
-  if (t && el) el.textContent = t.name;
-}
-
 function updatePanelStatus(id) {
   const t = S.terminals.get(id);
   const p = document.querySelector(`[data-tid="${id}"]`);
@@ -426,17 +451,63 @@ function updatePanelStatus(id) {
 }
 
 function updateLinked() {
-  for (const [id] of S.terminals) {
-    const p = document.querySelector(`[data-tid="${id}"]`);
-    if (p) { p.classList.toggle('linked', isLinked(id)); }
+  const ws = activeWs();
+  if (!ws) return;
+  for (const tid of ws.terminalIds) {
+    const p = document.querySelector(`[data-tid="${tid}"]`);
+    if (p) p.classList.toggle('linked', isLinked(tid, ws));
   }
 }
 
-function isLinked(id) { return S.links.some(l => l.from === id || l.to === id); }
-function getLinked(id) { const r = []; for (const l of S.links) { if (l.from === id) r.push(l.to); else if (l.to === id) r.push(l.from); } return r; }
+function isLinked(id, ws) { return (ws?.links || []).some(l => l.from === id || l.to === id); }
+function getLinked(id, ws) { const r = []; for (const l of (ws?.links || [])) { if (l.from === id) r.push(l.to); else if (l.to === id) r.push(l.from); } return r; }
 
 // ============================================
-// Browser Panel (right side, tabbed)
+// Workspace Management
+// ============================================
+function switchWorkspace(wsId) {
+  if (S.activeWorkspaceId === wsId) return;
+  S.activeWorkspaceId = wsId;
+  S.activeTerminalId = null;
+  renderLayout();
+  updateSidebar();
+  const ws = activeWs();
+  if (ws?.terminalIds.length) setActive(ws.terminalIds[0]);
+  persistWorkspaces();
+  // Fit terminals after switch
+  setTimeout(fitAll, 100);
+}
+
+function createWorkspace(name) {
+  const id = `w${S.nextWorkspaceId++}`;
+  S.workspaces.push({ id, name: name || `Workspace ${S.workspaces.length + 1}`, terminalIds: [], links: [], layout: null });
+  switchWorkspace(id);
+  persistWorkspaces();
+}
+
+function renameWorkspace(wsId, name) {
+  const ws = S.workspaces.find(w => w.id === wsId);
+  if (ws) { ws.name = name; updateSidebar(); persistWorkspaces(); }
+}
+
+function deleteWorkspace(wsId) {
+  if (S.workspaces.length <= 1) { showNotif('Cannot delete the last workspace', 'warning'); return; }
+  const ws = S.workspaces.find(w => w.id === wsId);
+  if (!ws) return;
+  // Destroy all terminals in this workspace
+  for (const tid of [...ws.terminalIds]) {
+    send('terminal:destroy', { id: tid });
+  }
+  S.workspaces = S.workspaces.filter(w => w.id !== wsId);
+  if (S.activeWorkspaceId === wsId) {
+    switchWorkspace(S.workspaces[0].id);
+  }
+  persistWorkspaces();
+  updateSidebar();
+}
+
+// ============================================
+// Browser Panel
 // ============================================
 function toggleBrowser(forceOpen) {
   const open = forceOpen !== undefined ? forceOpen : !S.browserOpen;
@@ -454,25 +525,19 @@ function addBrowserTab(url = '', title = 'New Tab') {
   const id = S.nextBrowserTabId++;
   S.browserTabs.push({ id, url, title });
   S.activeBrowserTab = S.browserTabs.length - 1;
-  renderBrowserTabs();
-  navigateBrowserTab();
-  persistBrowser();
+  renderBrowserTabs(); navigateBrowserTab(); persistBrowser();
 }
 
 function closeBrowserTab(index) {
   S.browserTabs.splice(index, 1);
   if (S.browserTabs.length === 0) { toggleBrowser(false); return; }
   if (S.activeBrowserTab >= S.browserTabs.length) S.activeBrowserTab = S.browserTabs.length - 1;
-  renderBrowserTabs();
-  navigateBrowserTab();
-  persistBrowser();
+  renderBrowserTabs(); navigateBrowserTab(); persistBrowser();
 }
 
 function selectBrowserTab(index) {
   S.activeBrowserTab = index;
-  renderBrowserTabs();
-  navigateBrowserTab();
-  persistBrowser();
+  renderBrowserTabs(); navigateBrowserTab(); persistBrowser();
 }
 
 function renderBrowserTabs() {
@@ -482,18 +547,14 @@ function renderBrowserTabs() {
     const el = document.createElement('button');
     el.className = 'browser-tab' + (i === S.activeBrowserTab ? ' active' : '');
     const label = document.createElement('span');
-    try { label.textContent = tab.url ? new URL(tab.url).hostname : tab.title; }
-    catch (e) { label.textContent = tab.title; }
+    try { label.textContent = tab.url ? new URL(tab.url).hostname : tab.title; } catch (e) { label.textContent = tab.title; }
     el.appendChild(label);
-    const close = document.createElement('span');
-    close.className = 'tab-close';
-    close.textContent = '\u00d7';
+    const close = document.createElement('span'); close.className = 'tab-close'; close.textContent = '\u00d7';
     close.addEventListener('click', (e) => { e.stopPropagation(); closeBrowserTab(i); });
     el.appendChild(close);
     el.addEventListener('click', () => selectBrowserTab(i));
     container.appendChild(el);
   });
-  // Update URL bar
   const tab = S.browserTabs[S.activeBrowserTab];
   const urlBar = document.getElementById('browser-url');
   if (tab && urlBar) urlBar.value = tab.url || '';
@@ -510,46 +571,25 @@ function navigateBrowserTab() {
     iframe.sandbox = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox';
     content.appendChild(iframe);
   } else {
-    const empty = document.createElement('div');
-    empty.className = 'browser-empty';
-    empty.textContent = 'Enter a URL to browse';
+    const empty = document.createElement('div'); empty.className = 'browser-empty'; empty.textContent = 'Enter a URL to browse';
     content.appendChild(empty);
   }
 }
 
 function persistBrowser() {
-  send('browser:update', {
-    tabs: S.browserTabs, activeTab: S.activeBrowserTab,
-    open: S.browserOpen, width: S.browserWidth,
-  });
+  send('browser:update', { tabs: S.browserTabs, activeTab: S.activeBrowserTab, open: S.browserOpen, width: S.browserWidth });
 }
 
 function setupBrowserResize() {
   const handle = document.getElementById('browser-resize-handle');
   const panel = document.getElementById('browser-panel');
   const workspace = document.getElementById('workspace');
-  let startX = 0, startW = 0;
   handle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    handle.classList.add('dragging');
-    startX = e.clientX;
-    startW = panel.offsetWidth;
-    const move = (e) => {
-      const delta = startX - e.clientX;
-      const newW = Math.max(300, Math.min(workspace.offsetWidth * 0.6, startW + delta));
-      panel.style.width = newW + 'px';
-      fitAll();
-    };
-    const up = () => {
-      handle.classList.remove('dragging');
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
-      document.body.style.cursor = ''; document.body.style.userSelect = '';
-      S.browserWidth = panel.offsetWidth / workspace.offsetWidth;
-      persistBrowser(); fitAll();
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    e.preventDefault(); handle.classList.add('dragging');
+    const startX = e.clientX, startW = panel.offsetWidth;
+    const move = (e) => { panel.style.width = Math.max(300, Math.min(workspace.offsetWidth * 0.6, startW + (startX - e.clientX))) + 'px'; fitAll(); };
+    const up = () => { handle.classList.remove('dragging'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = ''; document.body.style.userSelect = ''; S.browserWidth = panel.offsetWidth / workspace.offsetWidth; persistBrowser(); fitAll(); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
   });
 }
@@ -564,7 +604,7 @@ function createWelcome() {
     <div class="welcome-icon">&#x2B21;</div>
     <div class="welcome-title">Termates</div>
     <p style="color: var(--text-secondary); max-width: 420px; text-align: center; line-height: 1.5;">
-      On-device terminal multiplexer with persistent sessions, agent linking, and browser support.
+      On-device terminal multiplexer with persistent sessions and workspaces.
       Terminals backed by tmux survive restarts.
     </p>
     <div class="welcome-shortcuts">
@@ -572,8 +612,7 @@ function createWelcome() {
       <kbd>Ctrl+Shift+B</kbd> <span>Toggle Browser</span>
       <kbd>Ctrl+Shift+H</kbd> <span>Split Horizontal</span>
       <kbd>Ctrl+Shift+V</kbd> <span>Split Vertical</span>
-      <kbd>Ctrl+Shift+L</kbd> <span>Link Mode</span>
-      <kbd>Ctrl+Shift+S</kbd> <span>Send to Linked</span>
+      <kbd>Ctrl+Shift+N</kbd> <span>New Workspace</span>
     </div>`;
   const btn = document.createElement('button');
   btn.className = 'btn btn-primary'; btn.style.marginTop = '12px';
@@ -587,46 +626,64 @@ function createWelcome() {
 // Sidebar
 // ============================================
 function updateSidebar() {
-  // Terminal list
+  // Workspace tabs
+  const wsTabs = document.getElementById('workspace-tabs');
+  wsTabs.innerHTML = '';
+  for (const ws of S.workspaces) {
+    const tab = document.createElement('button');
+    tab.className = 'ws-tab' + (ws.id === S.activeWorkspaceId ? ' active' : '');
+    tab.textContent = ws.name;
+    tab.addEventListener('click', () => switchWorkspace(ws.id));
+    tab.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      const name = prompt('Rename workspace:', ws.name);
+      if (name) renameWorkspace(ws.id, name);
+    });
+    wsTabs.appendChild(tab);
+  }
+
+  // Terminal list for active workspace
+  const ws = activeWs();
   const tl = document.getElementById('terminal-list');
   tl.innerHTML = '';
-  for (const [id, t] of S.terminals) {
-    const li = document.createElement('li');
-    li.className = 'panel-list-item' + (id === S.activeTerminalId ? ' active' : '') + (S.linkMode ? ' link-select-mode' : '');
-    const dot = document.createElement('span'); dot.className = `terminal-status-dot ${t.status}`;
-    const nm = document.createElement('span'); nm.className = 'terminal-name'; nm.textContent = t.name;
-    li.appendChild(dot); li.appendChild(nm);
-    if (isLinked(id)) { const ld = document.createElement('span'); ld.className = 'link-indicator'; li.appendChild(ld); }
-    if (t.role) { const b = document.createElement('span'); b.className = `terminal-role-badge ${t.role}`; b.textContent = t.role; li.appendChild(b); }
-    const eb = document.createElement('button'); eb.className = 'edit-btn';
-    eb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-    eb.title = 'Configure terminal';
-    eb.addEventListener('click', (e) => { e.stopPropagation(); showEditDialog(id); });
-    li.appendChild(eb);
-    const cb = document.createElement('button'); cb.className = 'close-btn';
-    cb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-    cb.addEventListener('click', (e) => { e.stopPropagation(); send('terminal:destroy', { id }); });
-    li.appendChild(cb);
-    li.addEventListener('click', () => { if (S.linkMode) handleLinkClick(id); else { setActive(id); focusTerm(id); } });
-    li.addEventListener('dblclick', (e) => { e.preventDefault(); showEditDialog(id); });
-    tl.appendChild(li);
+  if (ws) {
+    for (const tid of ws.terminalIds) {
+      const t = S.terminals.get(tid);
+      if (!t) continue;
+      const li = document.createElement('li');
+      li.className = 'panel-list-item' + (tid === S.activeTerminalId ? ' active' : '') + (S.linkMode ? ' link-select-mode' : '');
+      const dot = document.createElement('span'); dot.className = `terminal-status-dot ${t.status}`;
+      const nm = document.createElement('span'); nm.className = 'terminal-name'; nm.textContent = t.name;
+      li.appendChild(dot); li.appendChild(nm);
+      if (isLinked(tid, ws)) { const ld = document.createElement('span'); ld.className = 'link-indicator'; li.appendChild(ld); }
+      if (t.role) { const b = document.createElement('span'); b.className = `terminal-role-badge ${t.role}`; b.textContent = t.role; li.appendChild(b); }
+      const eb = document.createElement('button'); eb.className = 'edit-btn';
+      eb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+      eb.title = 'Configure'; eb.addEventListener('click', (e) => { e.stopPropagation(); showEditDialog(tid); }); li.appendChild(eb);
+      const cb = document.createElement('button'); cb.className = 'close-btn';
+      cb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      cb.addEventListener('click', (e) => { e.stopPropagation(); send('terminal:destroy', { id: tid }); }); li.appendChild(cb);
+      li.addEventListener('click', () => { if (S.linkMode) handleLinkClick(tid); else { setActive(tid); focusTerm(tid); } });
+      li.addEventListener('dblclick', (e) => { e.preventDefault(); showEditDialog(tid); });
+      tl.appendChild(li);
+    }
   }
-  if (S.terminals.size === 0) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No terminals yet'; tl.appendChild(e); }
+  if (!ws?.terminalIds.length) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No terminals'; tl.appendChild(e); }
 
   // Link list
   const ll = document.getElementById('link-list');
   ll.innerHTML = '';
-  for (const link of S.links) {
+  const links = ws?.links || [];
+  for (const link of links) {
     const f = S.terminals.get(link.from), t = S.terminals.get(link.to);
     if (!f || !t) continue;
     const li = document.createElement('li'); li.className = 'link-list-item';
-    li.innerHTML = `<span>${f.name}</span><span class="link-line"> ↔ </span><span>${t.name}</span>`;
+    li.innerHTML = `<span>${f.name}</span><span class="link-line"> \u2194 </span><span>${t.name}</span>`;
     const ub = document.createElement('button'); ub.className = 'unlink-btn'; ub.textContent = 'unlink';
     ub.addEventListener('click', () => send('terminal:unlink', { from: link.from, to: link.to }));
-    li.appendChild(ub);
-    ll.appendChild(li);
+    li.appendChild(ub); ll.appendChild(li);
   }
-  if (S.links.length === 0) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No linked terminals'; ll.appendChild(e); }
+  if (!links.length) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No linked terminals'; ll.appendChild(e); }
 }
 
 // ============================================
@@ -653,7 +710,7 @@ function handleLinkClick(id) {
   if (!S.linkSource) { S.linkSource = id; showNotif(`Selected "${S.terminals.get(id)?.name}". Click another.`, 'attention'); }
   else if (S.linkSource !== id) {
     send('terminal:link', { from: S.linkSource, to: id });
-    showNotif(`Linked "${S.terminals.get(S.linkSource)?.name}" ↔ "${S.terminals.get(id)?.name}"`, 'success');
+    showNotif(`Linked "${S.terminals.get(S.linkSource)?.name}" \u2194 "${S.terminals.get(id)?.name}"`, 'success');
     exitLinkMode();
   }
 }
@@ -661,19 +718,21 @@ function handleLinkClick(id) {
 function showNotif(text, type = 'attention') {
   const c = document.getElementById('notifications');
   const el = document.createElement('div'); el.className = `notification ${type}`; el.textContent = text;
-  c.appendChild(el);
-  setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 300); }, 3000);
+  c.appendChild(el); setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 300); }, 3000);
 }
 
 function updateConn() {
   const dot = document.getElementById('status-dot'), txt = document.getElementById('status-text');
-  dot.classList.toggle('connected', S.connected);
-  txt.textContent = S.connected ? 'Connected' : 'Disconnected';
+  dot.classList.toggle('connected', S.connected); txt.textContent = S.connected ? 'Connected' : 'Disconnected';
 }
 
 function fitAll() {
-  for (const [id, t] of S.terminals) {
-    try { t.fitAddon.fit(); send('terminal:resize', { id, cols: t.xterm.cols, rows: t.xterm.rows }); } catch (e) {}
+  const ws = activeWs();
+  if (!ws) return;
+  for (const tid of ws.terminalIds) {
+    const t = S.terminals.get(tid);
+    if (!t) continue;
+    try { t.fitAddon.fit(); send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows }); } catch (e) {}
   }
 }
 
@@ -685,9 +744,7 @@ function showCreateDialog() {
   document.getElementById('create-name').value = `Terminal ${S.terminals.size + 1}`;
   document.getElementById('create-role').value = '';
   document.getElementById('create-cwd').value = '';
-  d.showModal();
-  document.getElementById('create-name').focus();
-  document.getElementById('create-name').select();
+  d.showModal(); document.getElementById('create-name').focus(); document.getElementById('create-name').select();
 }
 
 function showEditDialog(id) {
@@ -697,21 +754,8 @@ function showEditDialog(id) {
   document.getElementById('edit-name').value = t.name;
   document.getElementById('edit-role').value = t.role || '';
   document.getElementById('edit-status').value = t.status || 'idle';
-  const d = document.getElementById('edit-dialog');
-  d.showModal();
-  document.getElementById('edit-name').focus();
-  document.getElementById('edit-name').select();
-}
-
-function openSendDialog() {
-  if (!S.activeTerminalId) { showNotif('No active terminal', 'warning'); return; }
-  const linked = getLinked(S.activeTerminalId);
-  if (!linked.length) { showNotif('No linked terminals', 'warning'); return; }
-  const d = document.getElementById('send-dialog'), sel = document.getElementById('send-target'), ta = document.getElementById('send-text');
-  sel.innerHTML = '';
-  for (const id of linked) { const t = S.terminals.get(id); if (t) { const o = document.createElement('option'); o.value = id; o.textContent = t.name; sel.appendChild(o); } }
-  ta.value = '';
-  d.showModal(); ta.focus();
+  document.getElementById('edit-dialog').showModal();
+  document.getElementById('edit-name').focus(); document.getElementById('edit-name').select();
 }
 
 // ============================================
@@ -726,8 +770,8 @@ function setupKeys() {
         case 'H': e.preventDefault(); if (S.activeTerminalId) send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); break;
         case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
-        case 'S': e.preventDefault(); openSendDialog(); break;
         case 'W': e.preventDefault(); if (S.activeTerminalId) send('terminal:destroy', { id: S.activeTerminalId }); break;
+        case 'N': e.preventDefault(); createWorkspace(); break;
       }
     }
     if (e.key === 'Escape' && S.linkMode) exitLinkMode();
@@ -737,8 +781,9 @@ function setupKeys() {
 }
 
 function navTerminals(dir) {
-  const ids = [...S.terminals.keys()];
-  if (!ids.length) return;
+  const ws = activeWs();
+  if (!ws?.terminalIds.length) return;
+  const ids = ws.terminalIds;
   let idx = ids.indexOf(S.activeTerminalId) + dir;
   if (idx < 0) idx = ids.length - 1;
   if (idx >= ids.length) idx = 0;
@@ -749,13 +794,18 @@ function navTerminals(dir) {
 // Setup UI
 // ============================================
 function setupUI() {
-  // Disable right-click across the app (capture phase to override xterm.js)
   document.addEventListener('contextmenu', (e) => e.preventDefault(), true);
 
   document.getElementById('btn-new-terminal').addEventListener('click', showCreateDialog);
   document.getElementById('btn-toggle-browser').addEventListener('click', () => toggleBrowser());
   document.getElementById('btn-link-mode').addEventListener('click', () => S.linkMode ? exitLinkMode() : enterLinkMode());
   document.getElementById('btn-cancel-link').addEventListener('click', exitLinkMode);
+  document.getElementById('btn-new-workspace').addEventListener('click', () => createWorkspace());
+  document.getElementById('btn-delete-workspace').addEventListener('click', () => {
+    if (S.workspaces.length > 1 && confirm(`Delete "${activeWs()?.name}"? All terminals in it will be closed.`))
+      deleteWorkspace(S.activeWorkspaceId);
+  });
+
   document.getElementById('btn-split-h').addEventListener('click', () => {
     if (S.activeTerminalId) send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` });
     else showCreateDialog();
@@ -764,7 +814,6 @@ function setupUI() {
     if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }
     else showCreateDialog();
   });
-  document.getElementById('btn-send-linked').addEventListener('click', openSendDialog);
 
   // Create dialog
   document.getElementById('create-confirm').addEventListener('click', () => {
@@ -776,15 +825,6 @@ function setupUI() {
   });
   document.getElementById('create-cancel').addEventListener('click', () => document.getElementById('create-dialog').close());
   document.getElementById('create-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('create-confirm').click(); });
-
-  // Send dialog
-  document.getElementById('send-confirm').addEventListener('click', () => {
-    const target = document.getElementById('send-target').value, text = document.getElementById('send-text').value;
-    if (target && text) { send('terminal:send-to-linked', { from: S.activeTerminalId, to: target, text: text + '\n' }); showNotif('Sent', 'success'); }
-    document.getElementById('send-dialog').close();
-  });
-  document.getElementById('send-cancel').addEventListener('click', () => document.getElementById('send-dialog').close());
-  document.getElementById('send-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) document.getElementById('send-confirm').click(); });
 
   // Edit terminal dialog
   document.getElementById('edit-confirm').addEventListener('click', () => {
@@ -813,14 +853,11 @@ function setupUI() {
     e.stopPropagation();
     if (e.key === 'Enter') {
       e.preventDefault();
-      let url = e.target.value.trim();
-      if (!url) return;
+      let url = e.target.value.trim(); if (!url) return;
       if (!url.startsWith('http://') && !url.startsWith('https://')) { url = 'https://' + url; e.target.value = url; }
       const tab = S.browserTabs[S.activeBrowserTab];
       if (tab) { tab.url = url; try { tab.title = new URL(url).hostname; } catch (er) {} }
-      navigateBrowserTab();
-      renderBrowserTabs();
-      persistBrowser();
+      navigateBrowserTab(); renderBrowserTabs(); persistBrowser();
     }
   });
   document.getElementById('browser-back').addEventListener('click', () => { try { document.querySelector('#browser-content iframe')?.contentWindow.history.back(); } catch (e) {} });
@@ -828,7 +865,6 @@ function setupUI() {
   document.getElementById('browser-refresh').addEventListener('click', () => navigateBrowserTab());
 
   setupBrowserResize();
-
   window.addEventListener('resize', fitAll);
   new ResizeObserver(fitAll).observe(document.getElementById('layout-root'));
 }

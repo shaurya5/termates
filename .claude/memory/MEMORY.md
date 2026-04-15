@@ -1,0 +1,1 @@
+- [Agent communication design](project_agent_comms.md) — deferred feature: message bus + PTY injection for multi-agent collaboration
