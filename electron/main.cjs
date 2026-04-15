@@ -70,22 +70,38 @@ function setupAutoUpdater() {
     });
 
     autoUpdater.on('error', (err) => {
-      global.termatesUpdate.status = 'error';
-      global.termatesUpdate.error = err.message;
+      // electron-updater failed — fall back to GitHub API check
+      console.log('Auto-updater error, falling back to GitHub API:', err.message);
+      checkGitHubRelease();
     });
 
     // Check now, then every 30 minutes
-    autoUpdater.checkForUpdates();
-    setInterval(() => autoUpdater.checkForUpdates(), 30 * 60 * 1000);
+    autoUpdater.checkForUpdates().catch(() => checkGitHubRelease());
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => checkGitHubRelease());
+    }, 30 * 60 * 1000);
 
     // Expose download/install triggers via global
     global.termatesUpdate.download = () => autoUpdater.downloadUpdate();
     global.termatesUpdate.install = () => autoUpdater.quitAndInstall();
   } catch (err) {
     console.error('Auto-updater setup failed:', err.message);
-    global.termatesUpdate.currentVersion = app.getVersion();
+    global.termatesUpdate.currentVersion = app.isPackaged ? app.getVersion() : require('../package.json').version;
     checkGitHubRelease();
   }
+}
+
+// Also always run GitHub check after a delay as a safety net
+setTimeout(() => checkGitHubRelease(), 5000);
+
+function isNewer(latest, current) {
+  const a = latest.split('.').map(Number);
+  const b = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
 }
 
 // Fallback: check GitHub releases API directly (works in dev mode)
@@ -97,8 +113,9 @@ async function checkGitHubRelease() {
     if (!res.ok) return;
     const data = await res.json();
     const latest = data.tag_name?.replace(/^v/, '');
-    const current = global.termatesUpdate.currentVersion;
-    if (latest && current && latest !== current) {
+    const current = global.termatesUpdate.currentVersion || require('../package.json').version;
+    global.termatesUpdate.currentVersion = current;
+    if (latest && current && isNewer(latest, current)) {
       global.termatesUpdate.status = 'available';
       global.termatesUpdate.latestVersion = latest;
       global.termatesUpdate.releaseNotes = data.body || null;
