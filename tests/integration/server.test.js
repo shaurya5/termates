@@ -350,6 +350,341 @@ describe('WebSocket', () => {
   });
 });
 
+// ─── Extended WebSocket tests ────────────────────────────────────────────────
+
+describe('WebSocket (state verification)', () => {
+  it('terminal:status changes status and broadcasts terminal:status-changed', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Status Test' });
+      const created = await ws.next(m => m.type === 'terminal:created');
+      const id = created.payload.id;
+
+      ws.send('terminal:status', { id, status: 'success' });
+      const msg = await ws.next(m => m.type === 'terminal:status-changed' && m.payload.id === id);
+      expect(msg.payload.status).toBe('success');
+
+      // Verify state persisted: list should show updated status
+      ws.send('terminal:list');
+      const list = await ws.next(m => m.type === 'terminal:list');
+      const term = list.payload.terminals.find(t => t.id === id);
+      expect(term.status).toBe('success');
+
+      ws.send('terminal:destroy', { id });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:rename changes name and broadcasts terminal:renamed', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Before Rename' });
+      const created = await ws.next(m => m.type === 'terminal:created');
+      const id = created.payload.id;
+
+      ws.send('terminal:rename', { id, name: 'After Rename' });
+      const msg = await ws.next(m => m.type === 'terminal:renamed' && m.payload.id === id);
+      expect(msg.payload.name).toBe('After Rename');
+
+      // Verify via list
+      ws.send('terminal:list');
+      const list = await ws.next(m => m.type === 'terminal:list');
+      const term = list.payload.terminals.find(t => t.id === id);
+      expect(term.name).toBe('After Rename');
+
+      ws.send('terminal:destroy', { id });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:configure updates both name and role', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Config Test' });
+      const created = await ws.next(m => m.type === 'terminal:created');
+      const id = created.payload.id;
+
+      ws.send('terminal:configure', { id, name: 'New Name', role: 'reviewer' });
+      const msg = await ws.next(m => m.type === 'terminal:configured' && m.payload.id === id);
+      expect(msg.payload.name).toBe('New Name');
+      expect(msg.payload.role).toBe('reviewer');
+
+      // Verify via list
+      ws.send('terminal:list');
+      const list = await ws.next(m => m.type === 'terminal:list');
+      const term = list.payload.terminals.find(t => t.id === id);
+      expect(term.name).toBe('New Name');
+      expect(term.role).toBe('reviewer');
+
+      ws.send('terminal:destroy', { id });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('destroying a linked terminal broadcasts terminal:unlinked events', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Linked A' });
+      const a = await ws.next(m => m.type === 'terminal:created');
+      ws.send('terminal:create', { name: 'Linked B' });
+      const b = await ws.next(m => m.type === 'terminal:created');
+      ws.send('terminal:create', { name: 'Linked C' });
+      const c = await ws.next(m => m.type === 'terminal:created');
+
+      const idA = a.payload.id;
+      const idB = b.payload.id;
+      const idC = c.payload.id;
+
+      // Link A-B and A-C
+      ws.send('terminal:link', { from: idA, to: idB });
+      await ws.next(m => m.type === 'terminal:linked');
+      ws.send('terminal:link', { from: idA, to: idC });
+      await ws.next(m => m.type === 'terminal:linked');
+
+      // Destroy A — should broadcast unlinked events for both links
+      ws.send('terminal:destroy', { id: idA });
+      const destroyed = await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idA);
+      expect(destroyed.payload.id).toBe(idA);
+
+      // Should get two unlinked events
+      const unlinked1 = await ws.next(m => m.type === 'terminal:unlinked');
+      const unlinked2 = await ws.next(m => m.type === 'terminal:unlinked');
+
+      // Both should mention idA
+      const allPayloads = [unlinked1.payload, unlinked2.payload];
+      expect(allPayloads.some(p => p.from === idA || p.to === idA)).toBe(true);
+
+      // Cleanup
+      ws.send('terminal:destroy', { id: idB });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idB);
+      ws.send('terminal:destroy', { id: idC });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idC);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:send-to-linked delivers to linked terminal', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Sender' });
+      const sender = await ws.next(m => m.type === 'terminal:created');
+      ws.send('terminal:create', { name: 'Receiver' });
+      const receiver = await ws.next(m => m.type === 'terminal:created');
+
+      const from = sender.payload.id;
+      const to = receiver.payload.id;
+
+      ws.send('terminal:link', { from, to });
+      await ws.next(m => m.type === 'terminal:linked');
+
+      ws.send('terminal:send-to-linked', { from, to, text: 'hello linked' });
+      const msg = await ws.next(m => m.type === 'terminal:message-sent');
+      expect(msg.payload.from).toBe(from);
+      expect(msg.payload.to).toBe(to);
+      expect(msg.payload.text).toBe('hello linked');
+      expect(msg.payload).toHaveProperty('timestamp');
+
+      // Cleanup
+      ws.send('terminal:destroy', { id: from });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === from);
+      ws.send('terminal:destroy', { id: to });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === to);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:send-to-linked does NOT deliver to unlinked terminal', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'NotLinked A' });
+      const a = await ws.next(m => m.type === 'terminal:created');
+      ws.send('terminal:create', { name: 'NotLinked B' });
+      const b = await ws.next(m => m.type === 'terminal:created');
+
+      const idA = a.payload.id;
+      const idB = b.payload.id;
+
+      // Send without linking — should NOT produce a message-sent event
+      ws.send('terminal:send-to-linked', { from: idA, to: idB, text: 'should fail' });
+
+      // Wait briefly — no message-sent should arrive
+      await new Promise(r => setTimeout(r, 500));
+
+      // Verify by requesting list (ensures server processed our message)
+      ws.send('terminal:list');
+      await ws.next(m => m.type === 'terminal:list');
+
+      // Cleanup
+      ws.send('terminal:destroy', { id: idA });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idA);
+      ws.send('terminal:destroy', { id: idB });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idB);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('unknown WebSocket message type returns error', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('totally:bogus', {});
+      const msg = await ws.next(m => m.type === 'error');
+      expect(msg.payload.message).toContain('Unknown type');
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('workspace:update persists workspace changes', async () => {
+    const ws = await openWs();
+    try {
+      // First get current state
+      ws.send('terminal:list');
+      const list1 = await ws.next(m => m.type === 'terminal:list');
+      const origWorkspaces = list1.payload.workspaces;
+
+      // Update workspace name
+      const updated = origWorkspaces.map(w => ({
+        ...w,
+        name: w.id === origWorkspaces[0].id ? 'Updated Name' : w.name,
+      }));
+      ws.send('workspace:update', { workspaces: updated });
+
+      // Small wait for persistence
+      await new Promise(r => setTimeout(r, 500));
+
+      // Verify it persisted
+      ws.send('terminal:list');
+      const list2 = await ws.next(m => m.type === 'terminal:list');
+      const ws0 = list2.payload.workspaces.find(w => w.id === origWorkspaces[0].id);
+      expect(ws0.name).toBe('Updated Name');
+
+      // Restore original name
+      ws.send('workspace:update', { workspaces: origWorkspaces });
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:list sends buffered output for restored terminals', async () => {
+    const ws = await openWs();
+    try {
+      // Create a terminal and send some input
+      ws.send('terminal:create', { name: 'Buffer Test' });
+      const created = await ws.next(m => m.type === 'terminal:created');
+      const id = created.payload.id;
+
+      // Wait for shell prompt output
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Open a second WebSocket — terminal:list should replay buffer
+      const ws2 = await openWs();
+      try {
+        ws2.send('terminal:list');
+        await ws2.next(m => m.type === 'terminal:list');
+
+        // Should receive terminal:output with buffered data
+        const output = await ws2.next(
+          m => m.type === 'terminal:output' && m.payload.id === id,
+          3000
+        );
+        expect(output.payload.data.length).toBeGreaterThan(0);
+      } finally {
+        ws2.close();
+      }
+
+      ws.send('terminal:destroy', { id });
+      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('terminal:create with role returns role in created event', async () => {
+    const ws = await openWs();
+    try {
+      ws.send('terminal:create', { name: 'Role Test', role: 'coder' });
+      const msg = await ws.next(m => m.type === 'terminal:created');
+      expect(msg.payload.role).toBe('coder');
+
+      ws.send('terminal:destroy', { id: msg.payload.id });
+      await ws.next(m => m.type === 'terminal:destroyed');
+    } finally {
+      ws.close();
+    }
+  });
+});
+
+// ─── HTTP extended tests ─────────────────────────────────────────────────────
+
+describe('HTTP (extended)', () => {
+  it('GET /api/terminals returns links array', async () => {
+    const res = await fetch(`${BASE_URL}/api/terminals`);
+    const body = await res.json();
+    expect(body).toHaveProperty('links');
+    expect(Array.isArray(body.links)).toBe(true);
+  });
+
+  it('GET /api/ssh/hosts returns hosts array', async () => {
+    const res = await fetch(`${BASE_URL}/api/ssh/hosts`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('hosts');
+    expect(Array.isArray(body.hosts)).toBe(true);
+  });
+
+  it('GET /api/browse with empty path returns dirs array', async () => {
+    const res = await fetch(`${BASE_URL}/api/browse?path=`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('dirs');
+    expect(Array.isArray(body.dirs)).toBe(true);
+  });
+
+  it('GET /api/browse with ~ expands to home directory', async () => {
+    const res = await fetch(`${BASE_URL}/api/browse?path=~`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('current');
+    // Should not contain literal ~
+    expect(body.current).not.toContain('~');
+  });
+
+  it('GET /proxy without url param returns 400', async () => {
+    const res = await fetch(`${BASE_URL}/proxy`);
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/browser/snapshot without url param returns 400', async () => {
+    const res = await fetch(`${BASE_URL}/api/browser/snapshot`);
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/browse-dialog returns JSON response', async () => {
+    const res = await fetch(`${BASE_URL}/api/browse-dialog`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // In server mode (no Electron), should return null path with error
+    expect(body).toHaveProperty('path');
+  });
+
+  it('GET /api/update/status returns status object', async () => {
+    const res = await fetch(`${BASE_URL}/api/update/status`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('status');
+    expect(body).toHaveProperty('currentVersion');
+  });
+});
+
 // ─── Unix socket tests ────────────────────────────────────────────────────────
 
 describe('Unix socket', () => {

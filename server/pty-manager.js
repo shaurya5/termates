@@ -115,28 +115,18 @@ export class PtyManager {
     let spawnFile, spawnArgs;
 
     if (this.tmuxAvailable) {
-      // Kill stale session if it exists with the same name
+      // Kill stale session with same name
       if (this._tmuxSessionExists(tmuxSession)) {
-        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) { /* ok */ }
+        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
       }
 
-      // Step 1: Create session detached so we can configure it first
-      const createArgs = ['-f', TMUX_CONF, 'new-session', '-d', '-s', tmuxSession,
+      // Spawn tmux directly via PTY (not detached+attach) so TERM/colors inherit correctly
+      spawnFile = 'tmux';
+      spawnArgs = ['-f', TMUX_CONF, 'new-session', '-s', tmuxSession,
         '-x', String(termCols), '-y', String(termRows)];
       if (sshTarget) {
-        createArgs.push('ssh', sshTarget);
+        spawnArgs.push('ssh', sshTarget);
       }
-      try {
-        execSync(['tmux', ...createArgs].join(' '), { cwd: workDir, env, stdio: 'pipe' });
-      } catch (e) {
-        // Fallback: create without config
-        const fallback = ['tmux', 'new-session', '-d', '-s', tmuxSession].join(' ');
-        execSync(fallback, { cwd: workDir, env, stdio: 'pipe' });
-      }
-
-      // Step 2: Attach to the session via PTY
-      spawnFile = 'tmux';
-      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
     } else {
       const defaultShell = shell || process.env.SHELL || '/bin/zsh';
       spawnFile = defaultShell;
@@ -198,9 +188,10 @@ export class PtyManager {
     });
   }
 
-  // ---- Create remote terminal (SSH + remote tmux, multiplexed) ----
+  // ---- Create remote terminal (local tmux → SSH → remote tmux) ----
   createRemote({ id, name, role, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
     const termId = id || `t${this.nextId++}`;
+    const tmuxSession = this.tmuxAvailable ? this._tmuxName(termId) : null;
     const termCols = cols || 80;
     const termRows = rows || 24;
 
@@ -214,11 +205,31 @@ export class PtyManager {
 
     const { sshArgs, remoteCmd } = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
 
-    // For remote terminals, skip the local tmux wrapper entirely.
-    // Just spawn SSH directly via PTY — the REMOTE tmux handles persistence.
-    // This avoids all the quoting hell of nesting tmux → ssh → remote tmux.
-    const spawnFile = sshArgs[0]; // 'ssh'
-    const spawnArgs = [...sshArgs.slice(1), remoteCmd];
+    // Build the full SSH command as a single array for pty.spawn
+    // ssh [opts] target "cd $HOME/path && tmux new-session -s name ..."
+    const sshFullArgs = [...sshArgs.slice(1), remoteCmd];
+
+    let spawnFile, spawnArgs;
+    if (this.tmuxAvailable) {
+      if (this._tmuxSessionExists(tmuxSession)) {
+        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
+      }
+      // Use pty.spawn for local tmux — pass SSH as the tmux shell command.
+      // No execSync, no shell expansion, no quoting issues.
+      // tmux new-session -d creates detached, then we attach.
+      // The SSH command with remote cmd is passed as separate args to avoid quoting.
+      const sshBin = sshArgs[0]; // 'ssh'
+      spawnFile = 'tmux';
+      spawnArgs = [
+        '-f', TMUX_CONF,
+        'new-session', '-s', tmuxSession,
+        '-x', String(termCols), '-y', String(termRows),
+        sshBin, ...sshFullArgs,
+      ];
+    } else {
+      spawnFile = sshArgs[0];
+      spawnArgs = sshFullArgs;
+    }
 
     const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
       name: 'xterm-256color',
@@ -228,7 +239,7 @@ export class PtyManager {
       env,
     });
 
-    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, null);
+    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, tmuxSession);
     terminal.remote = true;
     terminal.sshTarget = sshTarget;
     this.terminals.set(termId, terminal);

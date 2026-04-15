@@ -58,6 +58,8 @@ function removeTerminalFromWorkspaces(terminalId) {
     if (ws.layout) {
       ws.layout = removeLayoutLeaf(ws.layout, terminalId);
     }
+    // Clear layout entirely if no terminals left
+    if (ws.terminalIds.length === 0) ws.layout = null;
   }
   stateManager.setWorkspaces(saved.workspaces);
 }

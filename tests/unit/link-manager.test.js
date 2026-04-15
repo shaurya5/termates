@@ -171,6 +171,118 @@ describe('LinkManager', () => {
   });
 
   // -------------------------------------------------------------------------
+  // getLinksFor() — used by terminal:destroy to broadcast unlink events
+  // -------------------------------------------------------------------------
+
+  describe('getLinksFor()', () => {
+    it('returns all link objects involving the terminal', () => {
+      lm.link('t1', 't2');
+      lm.link('t1', 't3');
+      lm.link('t2', 't3');
+
+      const links = lm.getLinksFor('t1');
+      expect(links).toHaveLength(2);
+    });
+
+    it('returns links where terminal is the "from" side', () => {
+      lm.link('t1', 't2');
+      const links = lm.getLinksFor('t1');
+      expect(links.some(l => l.from === 't1' && l.to === 't2')).toBe(true);
+    });
+
+    it('returns links where terminal is the "to" side', () => {
+      lm.link('t1', 't2');
+      const links = lm.getLinksFor('t2');
+      expect(links.some(l => (l.from === 't2' || l.to === 't2'))).toBe(true);
+    });
+
+    it('returns empty array when terminal has no links', () => {
+      lm.link('t1', 't2');
+      expect(lm.getLinksFor('t99')).toEqual([]);
+    });
+
+    it('returns empty array when no links exist', () => {
+      expect(lm.getLinksFor('t1')).toEqual([]);
+    });
+
+    it('each link object has from, to, and createdAt fields', () => {
+      lm.link('t1', 't2');
+      const links = lm.getLinksFor('t1');
+      expect(links[0]).toHaveProperty('from');
+      expect(links[0]).toHaveProperty('to');
+      expect(links[0]).toHaveProperty('createdAt');
+      expect(typeof links[0].createdAt).toBe('number');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Shared Notes
+  // -------------------------------------------------------------------------
+
+  describe('Shared Notes', () => {
+    it('createNote() creates a note with an ID', () => {
+      const note = lm.createNote('My Note', 'content here');
+      expect(note.id).toBe('n1');
+      expect(note.title).toBe('My Note');
+      expect(note.content).toBe('content here');
+    });
+
+    it('getNote() retrieves a created note', () => {
+      const note = lm.createNote('Test', 'body');
+      expect(lm.getNote(note.id)).toBe(note);
+    });
+
+    it('getNote() returns null for non-existent note', () => {
+      expect(lm.getNote('n999')).toBeNull();
+    });
+
+    it('updateNote() changes content and returns true', () => {
+      const note = lm.createNote('Test', 'old');
+      expect(lm.updateNote(note.id, 'new')).toBe(true);
+      expect(lm.getNote(note.id).content).toBe('new');
+    });
+
+    it('updateNote() returns false for non-existent note', () => {
+      expect(lm.updateNote('n999', 'content')).toBe(false);
+    });
+
+    it('linkNoteToTerminal() associates note with terminal', () => {
+      const note = lm.createNote('Test', 'body');
+      expect(lm.linkNoteToTerminal(note.id, 't1')).toBe(true);
+      const notes = lm.getNotesForTerminal('t1');
+      expect(notes).toHaveLength(1);
+      expect(notes[0].id).toBe(note.id);
+    });
+
+    it('linkNoteToTerminal() returns false for non-existent note', () => {
+      expect(lm.linkNoteToTerminal('n999', 't1')).toBe(false);
+    });
+
+    it('getNotesForTerminal() returns empty for unlinked terminal', () => {
+      lm.createNote('Test', 'body');
+      expect(lm.getNotesForTerminal('t99')).toEqual([]);
+    });
+
+    it('removeTerminal() cleans up note associations', () => {
+      const note = lm.createNote('Test', 'body');
+      lm.linkNoteToTerminal(note.id, 't1');
+      lm.removeTerminal('t1');
+      expect(lm.getNotesForTerminal('t1')).toEqual([]);
+    });
+
+    it('listNotes() returns all notes with their linked terminals', () => {
+      const n1 = lm.createNote('Note1', 'body1');
+      const n2 = lm.createNote('Note2', 'body2');
+      lm.linkNoteToTerminal(n1.id, 't1');
+
+      const notes = lm.listNotes();
+      expect(notes).toHaveLength(2);
+      const first = notes.find(n => n.id === n1.id);
+      expect(first.linkedTerminals).toContain('t1');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // listAll()
   // -------------------------------------------------------------------------
 
@@ -183,6 +295,14 @@ describe('LinkManager', () => {
 
     it('returns empty array when there are no links', () => {
       expect(lm.listAll()).toEqual([]);
+    });
+
+    it('each link has from, to, and createdAt fields', () => {
+      lm.link('t1', 't2');
+      const links = lm.listAll();
+      expect(links[0]).toHaveProperty('from');
+      expect(links[0]).toHaveProperty('to');
+      expect(links[0]).toHaveProperty('createdAt');
     });
   });
 });

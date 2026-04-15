@@ -51,7 +51,10 @@ export function buildSSHCommand(target, remoteCwd) {
     if (!fs.existsSync(SSH_SOCKETS_DIR)) fs.mkdirSync(SSH_SOCKETS_DIR, { recursive: true });
   } catch (e) { /* ok */ }
 
-  const socketPath = path.join(SSH_SOCKETS_DIR, '%r@%h:%p');
+  // Use target as socket name instead of SSH %r@%h:%p tokens
+  // because tmux treats % as format specifiers and corrupts the path
+  const safeTarget = target.replace(/[^a-zA-Z0-9@._-]/g, '_');
+  const socketPath = path.join(SSH_SOCKETS_DIR, safeTarget);
 
   // Build remote command: attach or create tmux session
   const parts = [
@@ -79,7 +82,10 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
     if (!fs.existsSync(SSH_SOCKETS_DIR)) fs.mkdirSync(SSH_SOCKETS_DIR, { recursive: true });
   } catch (e) { /* ok */ }
 
-  const socketPath = path.join(SSH_SOCKETS_DIR, '%r@%h:%p');
+  // Use target as socket name instead of SSH %r@%h:%p tokens
+  // because tmux treats % as format specifiers and corrupts the path
+  const safeTarget = target.replace(/[^a-zA-Z0-9@._-]/g, '_');
+  const socketPath = path.join(SSH_SOCKETS_DIR, safeTarget);
 
   let remoteCmd;
   // Kill stale session, cd, create tmux with mouse/scroll config inline

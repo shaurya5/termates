@@ -1,1 +1,2 @@
 - [Agent communication design](project_agent_comms.md) — deferred feature: message bus + PTY injection for multi-agent collaboration
+- [Never run tmux kill-server](feedback_never_kill_tmux_server.md) — CRITICAL: only kill termates-prefixed sessions, never all sessions

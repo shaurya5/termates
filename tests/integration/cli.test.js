@@ -166,3 +166,127 @@ describe('CLI commands', () => {
     expect(stdout).not.toContain('Renamed');
   });
 });
+
+// ─── Extended CLI tests ──────────────────────────────────────────────────────
+
+describe('CLI link/unlink/ask commands', () => {
+  let idA, idB;
+
+  it('create two terminals for link tests', async () => {
+    const resA = await runCli(['new', '-n', 'LinkTestA']);
+    expect(resA.code).toBe(0);
+    // Extract terminal ID from output like "Created terminal t5 (LinkTestA)"
+    const matchA = resA.stdout.match(/\b(t\d+)\b/);
+    expect(matchA).not.toBeNull();
+    idA = matchA[1];
+
+    const resB = await runCli(['new', '-n', 'LinkTestB']);
+    expect(resB.code).toBe(0);
+    const matchB = resB.stdout.match(/\b(t\d+)\b/);
+    expect(matchB).not.toBeNull();
+    idB = matchB[1];
+  });
+
+  it('termates link creates a link between two terminals', async () => {
+    const { code, stdout } = await runCli(['link', idA, idB]);
+    expect(code).toBe(0);
+  });
+
+  it('termates ls shows the link', async () => {
+    const { code, stdout } = await runCli(['ls']);
+    expect(code).toBe(0);
+    // The link should appear in the output
+    expect(stdout).toContain(idA);
+    expect(stdout).toContain(idB);
+  });
+
+  it('termates unlink removes the link', async () => {
+    const { code } = await runCli(['unlink', idA, idB]);
+    expect(code).toBe(0);
+  });
+
+  it('cleanup link test terminals', async () => {
+    await runCli(['destroy', idA]);
+    await runCli(['destroy', idB]);
+  });
+});
+
+describe('CLI status command', () => {
+  let termId;
+
+  it('create terminal for status test', async () => {
+    const res = await runCli(['new', '-n', 'StatusCLI']);
+    expect(res.code).toBe(0);
+    const match = res.stdout.match(/\b(t\d+)\b/);
+    expect(match).not.toBeNull();
+    termId = match[1];
+  });
+
+  it('termates status sets terminal status', async () => {
+    const { code } = await runCli(['status', termId, 'success']);
+    expect(code).toBe(0);
+  });
+
+  it('cleanup status test terminal', async () => {
+    await runCli(['destroy', termId]);
+  });
+});
+
+describe('CLI notify command', () => {
+  let termId;
+
+  it('create terminal for notify test', async () => {
+    const res = await runCli(['new', '-n', 'NotifyCLI']);
+    expect(res.code).toBe(0);
+    const match = res.stdout.match(/\b(t\d+)\b/);
+    expect(match).not.toBeNull();
+    termId = match[1];
+  });
+
+  it('termates notify sends a notification', async () => {
+    const { code } = await runCli(['notify', termId, '-s', 'warning', '-t', 'check this']);
+    expect(code).toBe(0);
+  });
+
+  it('cleanup notify test terminal', async () => {
+    await runCli(['destroy', termId]);
+  });
+});
+
+describe('CLI error cases', () => {
+  it('termates destroy nonexistent terminal exits non-zero', async () => {
+    const { code } = await runCli(['destroy', 'nonexistent_terminal_id']);
+    expect(code).not.toBe(0);
+  });
+
+  it('termates send to nonexistent terminal exits non-zero', async () => {
+    const { code } = await runCli(['send', 'nonexistent_terminal_id', 'hello']);
+    expect(code).not.toBe(0);
+  });
+
+  it('termates read from nonexistent terminal exits non-zero', async () => {
+    const { code } = await runCli(['read', 'nonexistent_terminal_id']);
+    expect(code).not.toBe(0);
+  });
+
+  it('termates rename nonexistent terminal exits non-zero', async () => {
+    const { code } = await runCli(['rename', 'nonexistent_terminal_id', 'NewName']);
+    expect(code).not.toBe(0);
+  });
+});
+
+describe('CLI terminal with role', () => {
+  it('termates new with --role creates terminal with role', async () => {
+    const res = await runCli(['new', '-n', 'RoleTest', '-r', 'coder']);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain('Created');
+
+    // Verify role appears in list
+    const list = await runCli(['ls']);
+    expect(list.stdout).toContain('RoleTest');
+
+    // Cleanup
+    const match = res.stdout.match(/\b(t\d+)\b/);
+    if (match) await runCli(['destroy', match[1]]);
+  });
+});

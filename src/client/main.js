@@ -185,7 +185,7 @@ function destroyTerminalLocally(id) {
   for (const ws of S.workspaces) {
     ws.terminalIds = ws.terminalIds.filter(tid => tid !== id);
     ws.links = ws.links.filter(l => l.from !== id && l.to !== id);
-    ws.layout = removeFromLayoutTree(ws.layout, id);
+    ws.layout = buildBalancedLayout(ws.terminalIds);
   }
   persistWorkspaces();
   renderLayout();
@@ -259,35 +259,21 @@ function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, bro
       const { xterm, fitAddon } = createXterm(t.id);
       S.terminals.set(t.id, { id: t.id, name: t.name, role: t.role, status: t.status || 'idle', xterm, fitAddon });
     }
-    // Prune workspace layouts and terminalIds to only existing terminals
+    // Prune workspace terminalIds to only existing terminals, rebuild layouts
     const existingIds = new Set(terminals.map(t => t.id));
     for (const ws of S.workspaces) {
       ws.terminalIds = ws.terminalIds.filter(id => existingIds.has(id));
-      ws.layout = pruneLayout(ws.layout, new Set(ws.terminalIds));
       ws.links = ws.links.filter(l => existingIds.has(l.from) && existingIds.has(l.to));
-      // If layout is empty but terminals exist, auto-build
-      if (!ws.layout && ws.terminalIds.length) {
-        ws.layout = null;
-        for (const tid of ws.terminalIds) ws.layout = addToLayoutTree(ws.layout, tid, 'horizontal');
-      } else if (ws.layout && ws.terminalIds.length) {
-        // Layout exists but may be incomplete — add any terminals missing from the tree
-        const inLayout = collectLayoutIds(ws.layout);
-        for (const tid of ws.terminalIds) {
-          if (!inLayout.has(tid)) {
-            ws.layout = addToLayoutTree(ws.layout, tid, 'horizontal');
-          }
-        }
-      }
+      // Always rebuild balanced layout from current terminal list
+      ws.layout = buildBalancedLayout(ws.terminalIds);
     }
     // Check for orphaned terminals
     const assigned = new Set(S.workspaces.flatMap(w => w.terminalIds));
     const orphans = terminals.filter(t => !assigned.has(t.id));
     if (orphans.length) {
       const ws = activeWs();
-      for (const t of orphans) {
-        ws.terminalIds.push(t.id);
-        ws.layout = addToLayoutTree(ws.layout, t.id, 'horizontal');
-      }
+      for (const t of orphans) ws.terminalIds.push(t.id);
+      ws.layout = buildBalancedLayout(ws.terminalIds);
     }
   }
 
@@ -318,68 +304,25 @@ function splitInTree(tree, targetId, direction, newLeaf) {
   if (tree.type === 'leaf' && tree.panelId === targetId)
     return { type: 'split', direction, ratio: 0.5, children: [{ ...tree }, newLeaf] };
   if (tree.type === 'split')
-    return { ...tree, children: [splitInTree(tree.children[0], targetId, direction, newLeaf), tree.children[1]] };
+    return { ...tree, children: [
+      splitInTree(tree.children[0], targetId, direction, newLeaf),
+      splitInTree(tree.children[1], targetId, direction, newLeaf),
+    ]};
   return tree;
 }
 
-function removeFromLayoutTree(layout, id) {
-  if (!layout) return null;
-  if (layout.type === 'leaf') return layout.panelId === id ? null : layout;
-  if (layout.type === 'split') {
-    const l = removeFromLayoutTree(layout.children[0], id);
-    const r = removeFromLayoutTree(layout.children[1], id);
-    if (!l && !r) return null;
-    if (!l) return r;
-    if (!r) return l;
-    return { ...layout, children: [l, r] };
-  }
-  return layout;
-}
-
-function findLeaf(n) {
-  if (!n) return null;
-  if (n.type === 'leaf') return n.panelId;
-  return findLeaf(n.children[0]) || findLeaf(n.children[1]);
-}
-
-function findShallowestLeaf(node, depth = 0) {
-  if (!node) return null;
-  if (node.type === 'leaf') return node.panelId;
-  // Find the shallowest (least nested) leaf — gives the biggest panel to split
-  const left = { id: findShallowestLeaf(node.children[0], depth + 1), depth: leafDepth(node.children[0]) };
-  const right = { id: findShallowestLeaf(node.children[1], depth + 1), depth: leafDepth(node.children[1]) };
-  return left.depth <= right.depth ? left.id : right.id;
-}
-
-function leafDepth(node) {
-  if (!node) return 999;
-  if (node.type === 'leaf') return 0;
-  return 1 + Math.min(leafDepth(node.children[0]), leafDepth(node.children[1]));
-}
-
-function treeDepth(node) {
-  if (!node || node.type === 'leaf') return 0;
-  return 1 + Math.max(treeDepth(node.children[0]), treeDepth(node.children[1]));
-}
-
-function pruneLayout(node, validIds) {
-  if (!node) return null;
-  if (node.type === 'leaf') return validIds.has(node.panelId) ? node : null;
-  if (node.type === 'split') {
-    const l = pruneLayout(node.children[0], validIds);
-    const r = pruneLayout(node.children[1], validIds);
-    if (!l && !r) return null;
-    if (!l) return r;
-    if (!r) return l;
-    return { ...node, children: [l, r] };
-  }
-  return null;
-}
-
-function collectLayoutIds(node) {
-  const ids = new Set();
-  (function walk(n) { if (!n) return; if (n.type === 'leaf') ids.add(n.panelId); if (n.type === 'split') { walk(n.children[0]); walk(n.children[1]); } })(node);
-  return ids;
+function buildBalancedLayout(ids, direction = 'horizontal') {
+  if (!ids || ids.length === 0) return null;
+  if (ids.length === 1) return { type: 'leaf', panelId: ids[0] };
+  const mid = Math.ceil(ids.length / 2);
+  const nextDir = direction === 'horizontal' ? 'vertical' : 'horizontal';
+  return {
+    type: 'split', direction, ratio: 0.5,
+    children: [
+      buildBalancedLayout(ids.slice(0, mid), nextDir),
+      buildBalancedLayout(ids.slice(mid), nextDir),
+    ],
+  };
 }
 
 // ============================================
@@ -388,17 +331,17 @@ function collectLayoutIds(node) {
 function addTerminalToLayout(id, ws) {
   ws = ws || activeWs();
   if (!ws) return;
-  const dir = S._splitDir || null;
+  const manualDir = S._splitDir;
+  const target = S._splitTarget;
   S._splitDir = null;
+  S._splitTarget = null;
 
-  if (!ws.layout) {
-    ws.layout = { type: 'leaf', panelId: id };
+  if (manualDir && ws.layout && target && ws.terminalIds.includes(target)) {
+    // User clicked Split H/V on a specific terminal — split THAT terminal
+    ws.layout = splitInTree(ws.layout, target, manualDir, { type: 'leaf', panelId: id });
   } else {
-    // Find the shallowest leaf (least nested = biggest panel) to split
-    const target = findShallowestLeaf(ws.layout);
-    // Auto-alternate direction based on tree depth for balanced layout
-    const autoDir = dir || (treeDepth(ws.layout) % 2 === 0 ? 'horizontal' : 'vertical');
-    ws.layout = splitInTree(ws.layout, target, autoDir, { type: 'leaf', panelId: id });
+    // Auto-add: rebuild balanced grid
+    ws.layout = buildBalancedLayout(ws.terminalIds);
   }
   renderLayout();
   persistWorkspaces();
@@ -408,7 +351,13 @@ function renderLayout() {
   const root = document.getElementById('layout-root');
   root.innerHTML = '';
   const ws = activeWs();
-  if (!ws || !ws.layout) { root.appendChild(createWelcome()); return; }
+  // No workspace, no layout, or no terminals → welcome screen
+  if (!ws || !ws.terminalIds.length) {
+    if (ws) ws.layout = null;  // clear stale layout
+    root.appendChild(createWelcome());
+    return;
+  }
+  if (!ws.layout) { root.appendChild(createWelcome()); return; }
   root.appendChild(renderNode(ws.layout));
   requestAnimationFrame(() => {
     for (const tid of ws.terminalIds) {
@@ -512,8 +461,8 @@ function createTermPanel(id) {
   };
   const mkBtn = (lbl, fn) => { const b = document.createElement('button'); b.className = 'panel-action-btn'; b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>', () => showEditDialog(id), '', 'Configure'));
-  acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: nextTermName() })));
-  acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); }));
+  acts.appendChild(mkBtn('Split H', () => { S._splitDir = 'horizontal'; S._splitTarget = id; send('terminal:create', { name: nextTermName() }); }));
+  acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; S._splitTarget = id; send('terminal:create', { name: nextTermName() }); }));
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => { destroyTerminalLocally(id); send('terminal:destroy', { id }); }, 'close', 'Close'));
   hdr.appendChild(acts);
 
@@ -910,8 +859,8 @@ function setupKeys() {
       switch (e.key) {
         case 'T': e.preventDefault(); showCreateDialog(); break;
         case 'B': e.preventDefault(); toggleBrowser(); break;
-        case 'H': e.preventDefault(); if (S.activeTerminalId) send('terminal:create', { name: nextTermName() }); break;
-        case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); } break;
+        case 'H': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'horizontal'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); } break;
+        case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
         case 'W': e.preventDefault(); if (S.activeTerminalId) { const _id = S.activeTerminalId; destroyTerminalLocally(_id); send('terminal:destroy', { id: _id }); } break;
         case 'N': e.preventDefault(); showWorkspaceDialog(); break;
@@ -950,11 +899,11 @@ function setupUI() {
   });
 
   document.getElementById('btn-split-h').addEventListener('click', () => {
-    if (S.activeTerminalId) send('terminal:create', { name: nextTermName() });
+    if (S.activeTerminalId) { S._splitDir = 'horizontal'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); }
     else showCreateDialog();
   });
   document.getElementById('btn-split-v').addEventListener('click', () => {
-    if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); }
+    if (S.activeTerminalId) { S._splitDir = 'vertical'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); }
     else showCreateDialog();
   });
 
