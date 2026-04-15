@@ -148,6 +148,17 @@ function restoreSession() {
   if (restored > 0) {
     console.log(`  [restore] Reattached to ${restored} persistent terminal(s)`);
   }
+
+  // Clean workspace state: remove terminal IDs that weren't restored
+  const liveIds = new Set(ptyManager.list().map(t => t.id));
+  const workspaces = stateManager.get().workspaces || [];
+  for (const ws of workspaces) {
+    ws.terminalIds = ws.terminalIds.filter(id => liveIds.has(id));
+    ws.links = (ws.links || []).filter(l => liveIds.has(l.from) && liveIds.has(l.to));
+    if (ws.terminalIds.length === 0) ws.layout = null;
+  }
+  stateManager.setWorkspaces(workspaces);
+  stateManager.saveNow();
 }
 
 // --- WebSocket Server ---
