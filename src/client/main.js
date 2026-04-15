@@ -1,6 +1,7 @@
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
+import { WebglAddon } from 'xterm-addon-webgl';
 
 // ============================================
 // State
@@ -94,6 +95,12 @@ function createXterm(id) {
   const fitAddon = new FitAddon();
   xterm.loadAddon(fitAddon);
   xterm.loadAddon(new WebLinksAddon());
+  // GPU-accelerated rendering - load after xterm.open() is called
+  xterm._webglAddon = new WebglAddon();
+  xterm._webglAddon.onContextLoss(() => {
+    // Fall back to canvas if WebGL context is lost
+    xterm._webglAddon.dispose();
+  });
   xterm.onData((data) => {
     const filtered = data.replace(/\x1b\[[\?>]?[\d;]*c/g, '');
     if (filtered) send('terminal:input', { id, data: filtered });
@@ -333,6 +340,8 @@ function renderLayout() {
       const c = document.querySelector(`[data-tid="${tid}"] .terminal-container`);
       if (c && !c.querySelector('.xterm')) {
         t.xterm.open(c);
+        // Activate WebGL renderer after DOM attachment
+        try { if (t.xterm._webglAddon) t.xterm.loadAddon(t.xterm._webglAddon); } catch (e) { /* WebGL unavailable, canvas fallback */ }
         t.fitAddon.fit();
         send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
       }
