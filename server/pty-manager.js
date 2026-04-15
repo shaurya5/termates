@@ -9,7 +9,7 @@ const STATE_DIR = path.join(os.homedir(), '.termates');
 const TMUX_CONF = path.join(STATE_DIR, 'tmux.conf');
 
 // Transparent tmux config: no status bar, mouse passthrough, no escape delay
-const TMUX_CONF_CONTENT = `
+export const TMUX_CONF_CONTENT = `
 set -g status off
 set -g mouse on
 set -g escape-time 0
