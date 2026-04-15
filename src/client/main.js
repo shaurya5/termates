@@ -176,25 +176,28 @@ function onCreated({ id, name, role, status }) {
 
 function onOutput({ id, data }) { S.terminals.get(id)?.xterm.write(data); }
 
-function onDestroyed({ id }) {
+function destroyTerminalLocally(id) {
   const t = S.terminals.get(id);
-  if (!t) return;
-  t.xterm.dispose();
-  S.terminals.delete(id);
-  // Remove from all workspaces
+  if (t) {
+    try { t.xterm.dispose(); } catch (e) { /* WebGL context may already be lost */ }
+    S.terminals.delete(id);
+  }
   for (const ws of S.workspaces) {
     ws.terminalIds = ws.terminalIds.filter(tid => tid !== id);
     ws.links = ws.links.filter(l => l.from !== id && l.to !== id);
     ws.layout = removeFromLayoutTree(ws.layout, id);
   }
   persistWorkspaces();
-  if (S.activeWorkspaceId) renderLayout();
+  renderLayout();
   updateSidebar();
   if (S.activeTerminalId === id) {
     const ws = activeWs();
-    const first = ws?.terminalIds[0];
-    setActive(first || null);
+    setActive(ws?.terminalIds[0] || null);
   }
+}
+
+function onDestroyed({ id }) {
+  destroyTerminalLocally(id);
 }
 
 function onConfigured({ id, name, role }) {
@@ -503,7 +506,7 @@ function createTermPanel(id) {
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>', () => showEditDialog(id), '', 'Configure'));
   acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: nextTermName() })));
   acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); }));
-  acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => send('terminal:destroy', { id }), 'close', 'Close'));
+  acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => { destroyTerminalLocally(id); send('terminal:destroy', { id }); }, 'close', 'Close'));
   hdr.appendChild(acts);
 
   const container = document.createElement('div'); container.className = 'terminal-container';
@@ -603,7 +606,7 @@ function deleteWorkspace(wsId) {
   if (!ws) return;
   // Destroy all terminals in this workspace
   for (const tid of [...ws.terminalIds]) {
-    send('terminal:destroy', { id: tid });
+    destroyTerminalLocally(tid); send('terminal:destroy', { id: tid });
   }
   S.workspaces = S.workspaces.filter(w => w.id !== wsId);
   if (S.activeWorkspaceId === wsId) {
@@ -788,7 +791,7 @@ function updateSidebar() {
       eb.title = 'Configure'; eb.addEventListener('click', (e) => { e.stopPropagation(); showEditDialog(tid); }); li.appendChild(eb);
       const cb = document.createElement('button'); cb.className = 'close-btn';
       cb.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-      cb.addEventListener('click', (e) => { e.stopPropagation(); send('terminal:destroy', { id: tid }); }); li.appendChild(cb);
+      cb.addEventListener('click', (e) => { e.stopPropagation(); destroyTerminalLocally(tid); send('terminal:destroy', { id: tid }); }); li.appendChild(cb);
       li.addEventListener('click', () => { if (S.linkMode) handleLinkClick(tid); else { setActive(tid); focusTerm(tid); } });
       li.addEventListener('dblclick', (e) => { e.preventDefault(); showEditDialog(tid); });
       tl.appendChild(li);
@@ -896,7 +899,7 @@ function setupKeys() {
         case 'H': e.preventDefault(); if (S.activeTerminalId) send('terminal:create', { name: nextTermName() }); break;
         case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
-        case 'W': e.preventDefault(); if (S.activeTerminalId) send('terminal:destroy', { id: S.activeTerminalId }); break;
+        case 'W': e.preventDefault(); if (S.activeTerminalId) { const _id = S.activeTerminalId; destroyTerminalLocally(_id); send('terminal:destroy', { id: _id }); } break;
         case 'N': e.preventDefault(); showWorkspaceDialog(); break;
       }
     }
@@ -967,7 +970,7 @@ function setupUI() {
   document.getElementById('edit-cancel').addEventListener('click', () => document.getElementById('edit-dialog').close());
   document.getElementById('edit-delete').addEventListener('click', () => {
     const id = document.getElementById('edit-id').value;
-    if (id) send('terminal:destroy', { id });
+    if (id) { destroyTerminalLocally(id); send('terminal:destroy', { id }); }
     document.getElementById('edit-dialog').close();
   });
   document.getElementById('edit-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('edit-confirm').click(); });

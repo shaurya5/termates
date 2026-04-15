@@ -80,20 +80,32 @@ function subscribeTerminalOutput(terminal) {
   terminal.onData((data) => {
     broadcast({ type: 'terminal:output', payload: { id: terminal.id, data } });
   });
-  // Auto-cleanup when the process exits (user typed exit, shell died, etc.)
+  // Auto-cleanup when the process exits
   terminal.onExit((id) => {
-    setTimeout(() => {
-      // Clean up after a short delay to let the exit message render
-      if (ptyManager.get(id)) {
-        linkManager.removeTerminal(id);
-        removeTerminalFromWorkspaces(id);
-        ptyManager.destroy(id);
-        broadcast({ type: 'terminal:destroyed', payload: { id } });
-        persistState();
-      }
-    }, 500);
+    setTimeout(() => cleanupDeadTerminal(id), 500);
   });
 }
+
+function cleanupDeadTerminal(id) {
+  if (!ptyManager.get(id)) return;
+  linkManager.removeTerminal(id);
+  removeTerminalFromWorkspaces(id);
+  ptyManager.destroy(id);
+  broadcast({ type: 'terminal:destroyed', payload: { id } });
+  persistState();
+}
+
+// Periodically check for dead tmux sessions and clean up ghost terminals.
+// This catches cases where onExit doesn't fire (e.g. tmux killed externally).
+setInterval(() => {
+  if (!ptyManager.tmuxAvailable) return;
+  const alive = new Set(ptyManager.listAliveTmuxSessions());
+  for (const t of ptyManager.list()) {
+    if (t.tmuxSession && !alive.has(t.tmuxSession)) {
+      cleanupDeadTerminal(t.id);
+    }
+  }
+}, 3000);
 
 // --- Restore previous session ---
 function restoreSession() {
