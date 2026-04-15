@@ -93,7 +93,7 @@ function createXterm(id) {
     fontFamily: "'SF Mono','Menlo','Monaco','Cascadia Code','Consolas',monospace",
     fontSize: 13, lineHeight: 1.2, cursorBlink: true, cursorStyle: 'bar',
     theme: xtermTheme, allowProposedApi: true,
-    macOptionIsMeta: true,       // Option acts as Meta/Alt (enables Option+Delete = word delete)
+    macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
   });
   const fitAddon = new FitAddon();
@@ -102,16 +102,43 @@ function createXterm(id) {
   xterm._webglAddon = new WebglAddon();
   xterm._webglAddon.onContextLoss(() => { xterm._webglAddon.dispose(); });
 
-  // Mac keybindings
+  // Mac keybindings — handle everything explicitly to avoid tmux conflicts
   if (isMac) {
     xterm.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
-      // Option+Backspace: delete word backward (Ctrl+W)
+      // --- Option (Alt) combos ---
+      // Option+Left: move cursor back one word
+      if (ev.altKey && !ev.metaKey && ev.key === 'ArrowLeft') {
+        send('terminal:input', { id, data: '\x1bb' });
+        return false;
+      }
+      // Option+Right: move cursor forward one word
+      if (ev.altKey && !ev.metaKey && ev.key === 'ArrowRight') {
+        send('terminal:input', { id, data: '\x1bf' });
+        return false;
+      }
+      // Option+Backspace: delete word backward
       if (ev.altKey && !ev.metaKey && ev.key === 'Backspace') {
         send('terminal:input', { id, data: '\x17' });
         return false;
       }
-      // Cmd+Backspace: kill entire line (Ctrl+U)
+      // Option+Delete: delete word forward
+      if (ev.altKey && !ev.metaKey && ev.key === 'Delete') {
+        send('terminal:input', { id, data: '\x1bd' });
+        return false;
+      }
+      // --- Cmd combos ---
+      // Cmd+Left: go to beginning of line
+      if (ev.metaKey && !ev.altKey && ev.key === 'ArrowLeft') {
+        send('terminal:input', { id, data: '\x01' });
+        return false;
+      }
+      // Cmd+Right: go to end of line
+      if (ev.metaKey && !ev.altKey && ev.key === 'ArrowRight') {
+        send('terminal:input', { id, data: '\x05' });
+        return false;
+      }
+      // Cmd+Backspace: kill entire line
       if (ev.metaKey && !ev.altKey && ev.key === 'Backspace') {
         send('terminal:input', { id, data: '\x15' });
         return false;
