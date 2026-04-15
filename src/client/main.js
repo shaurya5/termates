@@ -38,6 +38,7 @@ const xtermTheme = {
 // Workspace Helpers
 // ============================================
 function activeWs() { return S.workspaces.find(w => w.id === S.activeWorkspaceId) || null; }
+function nextTermName() { const ws = activeWs(); return `Terminal ${(ws?.terminalIds.length || 0) + 1}`; }
 function wsTerminals(ws) { return (ws?.terminalIds || []).map(id => S.terminals.get(id)).filter(Boolean); }
 function wsLinks(ws) { return ws?.links || []; }
 
@@ -87,20 +88,38 @@ function handleMsg(msg) {
 // Terminal Events
 // ============================================
 function createXterm(id) {
+  const isMac = navigator.platform?.includes('Mac') || navigator.userAgent?.includes('Mac');
   const xterm = new Terminal({
     fontFamily: "'SF Mono','Menlo','Monaco','Cascadia Code','Consolas',monospace",
     fontSize: 13, lineHeight: 1.2, cursorBlink: true, cursorStyle: 'bar',
     theme: xtermTheme, allowProposedApi: true,
+    macOptionIsMeta: true,       // Option acts as Meta/Alt (enables Option+Delete = word delete)
+    macOptionClickForcesSelection: true,
   });
   const fitAddon = new FitAddon();
   xterm.loadAddon(fitAddon);
   xterm.loadAddon(new WebLinksAddon());
-  // GPU-accelerated rendering - load after xterm.open() is called
   xterm._webglAddon = new WebglAddon();
-  xterm._webglAddon.onContextLoss(() => {
-    // Fall back to canvas if WebGL context is lost
-    xterm._webglAddon.dispose();
-  });
+  xterm._webglAddon.onContextLoss(() => { xterm._webglAddon.dispose(); });
+
+  // Mac keybindings: Cmd+Backspace = kill line, Cmd+K = clear
+  if (isMac) {
+    xterm.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      // Cmd+Backspace: kill line (send Ctrl+U)
+      if (ev.metaKey && ev.key === 'Backspace') {
+        send('terminal:input', { id, data: '\x15' });
+        return false;
+      }
+      // Cmd+K: clear terminal
+      if (ev.metaKey && ev.key === 'k') {
+        xterm.clear();
+        return false;
+      }
+      return true;
+    });
+  }
+
   xterm.onData((data) => {
     const filtered = data.replace(/\x1b\[[\?>]?[\d;]*c/g, '');
     if (filtered) send('terminal:input', { id, data: filtered });
@@ -244,16 +263,24 @@ function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, bro
   if (S.browserOpen) toggleBrowser(true);
   renderBrowserTabs();
 
-  // Force tmux redraw
-  setTimeout(() => {
-    for (const [id, t] of S.terminals) {
-      try {
-        const cols = t.xterm.cols, rows = t.xterm.rows;
-        send('terminal:resize', { id, cols: Math.max(1, cols - 1), rows });
-        setTimeout(() => send('terminal:resize', { id, cols, rows }), 100);
-      } catch (e) {}
-    }
-  }, 300);
+  // Force tmux to redraw by cycling resize multiple times.
+  // tmux caches the terminal size — a single resize may not trigger a full redraw.
+  const forceRedraw = (delay) => {
+    setTimeout(() => {
+      for (const [id, t] of S.terminals) {
+        try {
+          t.fitAddon.fit();
+          const cols = t.xterm.cols, rows = t.xterm.rows;
+          send('terminal:resize', { id, cols: Math.max(1, cols - 1), rows: Math.max(1, rows - 1) });
+          setTimeout(() => {
+            send('terminal:resize', { id, cols, rows });
+          }, 150);
+        } catch (e) {}
+      }
+    }, delay);
+  };
+  forceRedraw(300);
+  forceRedraw(800);
 }
 
 // ============================================
@@ -442,8 +469,8 @@ function createTermPanel(id) {
   };
   const mkBtn = (lbl, fn) => { const b = document.createElement('button'); b.className = 'panel-action-btn'; b.textContent = lbl; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>', () => showEditDialog(id), '', 'Configure'));
-  acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` })));
-  acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }));
+  acts.appendChild(mkBtn('Split H', () => send('terminal:create', { name: nextTermName() })));
+  acts.appendChild(mkBtn('Split V', () => { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); }));
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => send('terminal:destroy', { id }), 'close', 'Close'));
   hdr.appendChild(acts);
 
@@ -494,12 +521,13 @@ function switchWorkspace(wsId) {
   setTimeout(fitAll, 100);
 }
 
-function createWorkspace(name, type, sshTarget, remoteCwd) {
+function createWorkspace(name, type, cwd, sshTarget, remoteCwd) {
   const id = `w${S.nextWorkspaceId++}`;
   S.workspaces.push({
     id, name: name || `Workspace ${S.workspaces.length + 1}`,
     terminalIds: [], links: [], layout: null,
-    type: type || 'local', sshTarget: sshTarget || null, remoteCwd: remoteCwd || null,
+    type: type || 'local', cwd: cwd || null,
+    sshTarget: sshTarget || null, remoteCwd: remoteCwd || null,
   });
   switchWorkspace(id);
   persistWorkspaces();
@@ -807,7 +835,7 @@ function fitAll() {
 // ============================================
 function showCreateDialog() {
   const d = document.getElementById('create-dialog');
-  document.getElementById('create-name').value = `Terminal ${S.terminals.size + 1}`;
+  document.getElementById('create-name').value = nextTermName();
   document.getElementById('create-role').value = '';
   document.getElementById('create-cwd').value = '';
   d.showModal(); document.getElementById('create-name').focus(); document.getElementById('create-name').select();
@@ -833,8 +861,8 @@ function setupKeys() {
       switch (e.key) {
         case 'T': e.preventDefault(); showCreateDialog(); break;
         case 'B': e.preventDefault(); toggleBrowser(); break;
-        case 'H': e.preventDefault(); if (S.activeTerminalId) send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); break;
-        case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); } break;
+        case 'H': e.preventDefault(); if (S.activeTerminalId) send('terminal:create', { name: nextTermName() }); break;
+        case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
         case 'W': e.preventDefault(); if (S.activeTerminalId) send('terminal:destroy', { id: S.activeTerminalId }); break;
         case 'N': e.preventDefault(); showWorkspaceDialog(); break;
@@ -873,17 +901,17 @@ function setupUI() {
   });
 
   document.getElementById('btn-split-h').addEventListener('click', () => {
-    if (S.activeTerminalId) send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` });
+    if (S.activeTerminalId) send('terminal:create', { name: nextTermName() });
     else showCreateDialog();
   });
   document.getElementById('btn-split-v').addEventListener('click', () => {
-    if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: `Terminal ${S.terminals.size + 1}` }); }
+    if (S.activeTerminalId) { S._splitDir = 'vertical'; send('terminal:create', { name: nextTermName() }); }
     else showCreateDialog();
   });
 
   // Create dialog
   document.getElementById('create-confirm').addEventListener('click', () => {
-    const name = document.getElementById('create-name').value.trim() || `Terminal ${S.terminals.size + 1}`;
+    const name = document.getElementById('create-name').value.trim() || nextTermName();
     const role = document.getElementById('create-role').value || undefined;
     const cwd = document.getElementById('create-cwd').value.trim() || undefined;
     send('terminal:create', { name, role, cwd });
@@ -921,13 +949,24 @@ function setupUI() {
   document.getElementById('ws-confirm').addEventListener('click', () => {
     const name = document.getElementById('ws-name').value.trim();
     const type = document.querySelector('input[name="ws-type"]:checked').value;
+    const cwd = document.getElementById('ws-cwd').value.trim();
     const sshTarget = document.getElementById('ws-ssh-target').value.trim();
     const remoteCwd = document.getElementById('ws-remote-cwd').value.trim();
     if (type === 'remote' && !sshTarget) { showNotif('SSH target required for remote workspace', 'warning'); return; }
-    createWorkspace(name, type, sshTarget || null, remoteCwd || null);
+    createWorkspace(name, type, cwd || null, sshTarget || null, remoteCwd || null);
     document.getElementById('ws-dialog').close();
   });
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
+  document.getElementById('ws-cwd-browse').addEventListener('click', () => {
+    const picker = document.getElementById('ws-cwd-picker');
+    picker.classList.toggle('hidden');
+    if (!picker.classList.contains('hidden')) {
+      loadDirectory(picker, document.getElementById('ws-cwd').value || '', (p) => {
+        document.getElementById('ws-cwd').value = p;
+        picker.classList.add('hidden');
+      });
+    }
+  });
   document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('ws-confirm').click(); });
 
   // Directory browse button

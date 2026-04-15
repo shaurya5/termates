@@ -171,7 +171,9 @@ function handleWsMessage(ws, msg) {
       } else if (sshTarget) {
         terminal = ptyManager.createRemote({ name, role, sshTarget, remoteCwd });
       } else {
-        terminal = ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd, role });
+        // Inherit working directory from workspace if not explicitly set
+        const effectiveCwd = cwd || activeWsState?.cwd || undefined;
+        terminal = ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd: effectiveCwd, role });
       }
       subscribeTerminalOutput(terminal);
       addTerminalToWorkspace(terminal.id);
