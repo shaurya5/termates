@@ -185,6 +185,17 @@ html, body {
   border-color: var(--accent);
 }
 
+.ws-tab-input {
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  outline: none;
+}
+
 /* Panel List */
 .panel-list {
   list-style: none;

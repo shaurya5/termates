@@ -635,9 +635,25 @@ function updateSidebar() {
     tab.textContent = ws.name;
     tab.addEventListener('click', () => switchWorkspace(ws.id));
     tab.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      const name = prompt('Rename workspace:', ws.name);
-      if (name) renameWorkspace(ws.id, name);
+      e.preventDefault(); e.stopPropagation();
+      // Replace tab with inline input
+      const input = document.createElement('input');
+      input.className = 'ws-tab-input';
+      input.value = ws.name;
+      input.style.width = Math.max(60, tab.offsetWidth) + 'px';
+      tab.replaceWith(input);
+      input.focus(); input.select();
+      const commit = () => {
+        const name = input.value.trim();
+        if (name && name !== ws.name) renameWorkspace(ws.id, name);
+        updateSidebar(); // Re-render tabs
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = ws.name; input.blur(); }
+        e.stopPropagation();
+      });
     });
     wsTabs.appendChild(tab);
   }
