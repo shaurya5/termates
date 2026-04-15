@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Termates</title>
+  <link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">⬡</span>
+          <span class="logo-text">Termates</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">
+          <span class="section-title">Terminals</span>
+          <div class="section-actions">
+            <button id="btn-new-terminal" class="icon-btn" title="New Terminal (Ctrl+Shift+T)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+          </div>
+        </div>
+        <ul id="terminal-list" class="panel-list"></ul>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">
+          <span class="section-title">Links</span>
+          <div class="section-actions">
+            <button id="btn-link-mode" class="icon-btn" title="Link Mode: click two terminals to connect them">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </button>
+          </div>
+        </div>
+        <ul id="link-list" class="panel-list"></ul>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="connection-status">
+          <span id="status-dot" class="status-dot"></span>
+          <span id="status-text">Connecting...</span>
+        </div>
+        <div class="footer-info">100% on-device</div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main id="main-content">
+      <div id="toolbar">
+        <div class="toolbar-left">
+          <button id="btn-split-h" class="toolbar-btn" title="Split Horizontal">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            <span>Split H</span>
+          </button>
+          <button id="btn-split-v" class="toolbar-btn" title="Split Vertical">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
+            <span>Split V</span>
+          </button>
+          <div class="toolbar-separator"></div>
+          <button id="btn-send-linked" class="toolbar-btn" title="Send to linked terminal">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <span>Send to Linked</span>
+          </button>
+          <div class="toolbar-separator"></div>
+          <button id="btn-toggle-browser" class="toolbar-btn" title="Toggle Browser Panel (Ctrl+Shift+B)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <span>Browser</span>
+          </button>
+        </div>
+        <div class="toolbar-right">
+          <span id="active-terminal-name" class="active-name"></span>
+        </div>
+      </div>
+
+      <!-- Workspace: terminals + browser side-by-side -->
+      <div id="workspace">
+        <div id="terminal-area">
+          <div id="layout-root"></div>
+        </div>
+        <div id="browser-resize-handle" class="hidden"></div>
+        <div id="browser-panel" class="hidden">
+          <div class="browser-tab-bar">
+            <div id="browser-tabs" class="browser-tabs"></div>
+            <button id="btn-add-browser-tab" class="browser-tab-add" title="New tab">+</button>
+            <button id="btn-close-browser" class="browser-tab-close" title="Close browser panel">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="browser-url-row">
+            <button id="browser-back" class="browser-nav-btn" title="Back">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button id="browser-fwd" class="browser-nav-btn" title="Forward">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button id="browser-refresh" class="browser-nav-btn" title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
+            <input id="browser-url" class="browser-url-bar" type="text" placeholder="Enter URL...">
+          </div>
+          <div id="browser-content" class="browser-frame-container">
+            <div class="browser-empty">Enter a URL to browse</div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <div id="notifications"></div>
+
+    <div id="link-mode-overlay" class="hidden">
+      <div class="overlay-banner">
+        LINK MODE: Click two terminals to connect them
+        <button id="btn-cancel-link" class="cancel-btn">Cancel (Esc)</button>
+      </div>
+    </div>
+
+    <dialog id="send-dialog">
+      <div class="dialog-header">Send to Linked Terminal</div>
+      <div class="dialog-body">
+        <label for="send-target">Target Terminal:</label>
+        <select id="send-target"></select>
+        <label for="send-text">Message:</label>
+        <textarea id="send-text" rows="4" placeholder="Enter command or message to send..."></textarea>
+      </div>
+      <div class="dialog-footer">
+        <button id="send-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="send-confirm" class="btn btn-primary">Send</button>
+      </div>
+    </dialog>
+
+    <dialog id="create-dialog">
+      <div class="dialog-header">New Terminal</div>
+      <div class="dialog-body">
+        <label for="create-name">Name:</label>
+        <input id="create-name" type="text" placeholder="e.g. Agent Coder">
+        <label for="create-role">Role (optional):</label>
+        <select id="create-role">
+          <option value="">None</option>
+          <option value="lead">Lead</option>
+          <option value="coder">Coder</option>
+          <option value="reviewer">Reviewer</option>
+          <option value="tester">Tester</option>
+          <option value="researcher">Researcher</option>
+          <option value="devops">DevOps</option>
+        </select>
+        <label for="create-cwd">Working Directory:</label>
+        <input id="create-cwd" type="text" placeholder="Leave empty for home directory">
+      </div>
+      <div class="dialog-footer">
+        <button id="create-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="create-confirm" class="btn btn-primary">Create</button>
+      </div>
+    </dialog>
+  </div>
+
+  <script src="/dist/bundle.js"></script>
+</body>
+</html>
