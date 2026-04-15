@@ -102,12 +102,17 @@ function createXterm(id) {
   xterm._webglAddon = new WebglAddon();
   xterm._webglAddon.onContextLoss(() => { xterm._webglAddon.dispose(); });
 
-  // Mac keybindings: Cmd+Backspace = kill line, Cmd+K = clear
+  // Mac keybindings
   if (isMac) {
     xterm.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
-      // Cmd+Backspace: kill line (send Ctrl+U)
-      if (ev.metaKey && ev.key === 'Backspace') {
+      // Option+Backspace: delete word backward (Ctrl+W)
+      if (ev.altKey && !ev.metaKey && ev.key === 'Backspace') {
+        send('terminal:input', { id, data: '\x17' });
+        return false;
+      }
+      // Cmd+Backspace: kill entire line (Ctrl+U)
+      if (ev.metaKey && !ev.altKey && ev.key === 'Backspace') {
         send('terminal:input', { id, data: '\x15' });
         return false;
       }
