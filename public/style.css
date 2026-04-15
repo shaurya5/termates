@@ -347,6 +347,54 @@ html, body {
 .link-list-item:hover .unlink-btn { opacity: 1; }
 .link-list-item .unlink-btn:hover { color: var(--error); }
 
+/* Update Banner */
+.update-banner {
+  padding: 8px 12px;
+  background: rgba(88, 166, 255, 0.1);
+  border-top: 1px solid rgba(88, 166, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.update-banner.downloading {
+  background: rgba(210, 153, 34, 0.1);
+  border-top-color: rgba(210, 153, 34, 0.3);
+}
+
+.update-banner.ready {
+  background: rgba(63, 185, 80, 0.1);
+  border-top-color: rgba(63, 185, 80, 0.3);
+}
+
+.update-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+  min-width: 0;
+}
+
+.update-btn {
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.update-btn:hover { background: var(--accent-hover); }
+
+.update-btn.installing {
+  background: var(--success);
+}
+
 /* Sidebar Footer */
 .sidebar-footer {
   padding: 10px 16px;

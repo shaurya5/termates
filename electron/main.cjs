@@ -4,8 +4,95 @@ const path = require('path');
 let mainWindow = null;
 let serverStarted = false;
 
-// The server port
 const PORT = 7680;
+
+// --- Auto-update state (shared with the server via global) ---
+global.termatesUpdate = {
+  status: 'idle',       // idle | checking | available | downloading | downloaded | error
+  currentVersion: null,
+  latestVersion: null,
+  releaseNotes: null,
+  progress: null,
+  error: null,
+};
+
+function setupAutoUpdater() {
+  // Only works in packaged app, not in dev
+  if (!app.isPackaged) {
+    global.termatesUpdate.currentVersion = require('../package.json').version;
+    // In dev mode, check GitHub releases directly via fetch
+    checkGitHubRelease();
+    return;
+  }
+
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    global.termatesUpdate.currentVersion = app.getVersion();
+
+    autoUpdater.on('checking-for-update', () => {
+      global.termatesUpdate.status = 'checking';
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      global.termatesUpdate.status = 'available';
+      global.termatesUpdate.latestVersion = info.version;
+      global.termatesUpdate.releaseNotes = info.releaseNotes || null;
+    });
+
+    autoUpdater.on('update-not-available', () => {
+      global.termatesUpdate.status = 'idle';
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      global.termatesUpdate.status = 'downloading';
+      global.termatesUpdate.progress = Math.round(progress.percent);
+    });
+
+    autoUpdater.on('update-downloaded', () => {
+      global.termatesUpdate.status = 'downloaded';
+      global.termatesUpdate.progress = 100;
+    });
+
+    autoUpdater.on('error', (err) => {
+      global.termatesUpdate.status = 'error';
+      global.termatesUpdate.error = err.message;
+    });
+
+    // Check now, then every 30 minutes
+    autoUpdater.checkForUpdates();
+    setInterval(() => autoUpdater.checkForUpdates(), 30 * 60 * 1000);
+
+    // Expose download/install triggers via global
+    global.termatesUpdate.download = () => autoUpdater.downloadUpdate();
+    global.termatesUpdate.install = () => autoUpdater.quitAndInstall();
+  } catch (err) {
+    console.error('Auto-updater setup failed:', err.message);
+    global.termatesUpdate.currentVersion = app.getVersion();
+    checkGitHubRelease();
+  }
+}
+
+// Fallback: check GitHub releases API directly (works in dev mode)
+async function checkGitHubRelease() {
+  try {
+    const res = await fetch('https://api.github.com/repos/shaurya5/termates/releases/latest', {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Termates' },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const latest = data.tag_name?.replace(/^v/, '');
+    const current = global.termatesUpdate.currentVersion;
+    if (latest && current && latest !== current) {
+      global.termatesUpdate.status = 'available';
+      global.termatesUpdate.latestVersion = latest;
+      global.termatesUpdate.releaseNotes = data.body || null;
+      global.termatesUpdate.releaseUrl = data.html_url;
+    }
+  } catch (e) { /* silent */ }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -28,10 +115,8 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // Load the app from the local server
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
-  // Open external links in system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) shell.openExternal(url);
     return { action: 'deny' };
@@ -46,10 +131,8 @@ async function startServer() {
   if (serverStarted) return;
   serverStarted = true;
 
-  // Set port before importing server
   process.env.PORT = String(PORT);
 
-  // Import the ESM server module using file:// URL
   try {
     const serverPath = path.join(__dirname, '..', 'server', 'index.js');
     const serverUrl = require('url').pathToFileURL(serverPath).href;
@@ -62,8 +145,7 @@ async function startServer() {
 
 app.whenReady().then(async () => {
   await startServer();
-
-  // Give server a moment to bind
+  setupAutoUpdater();
   setTimeout(createWindow, 500);
 
   app.on('activate', () => {
@@ -72,11 +154,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  // On macOS, keep running in the dock
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Don't quit when window closes on macOS - terminal sessions persist
-app.on('before-quit', () => {
-  // Server cleanup happens via its own signal handlers
-});
+app.on('before-quit', () => {});

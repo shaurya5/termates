@@ -59,12 +59,20 @@
         <ul id="link-list" class="panel-list"></ul>
       </div>
 
+      <!-- Update banner (hidden by default) -->
+      <div id="update-banner" class="update-banner hidden">
+        <div class="update-text">
+          <span id="update-message">Update available</span>
+        </div>
+        <button id="update-action" class="update-btn">Update</button>
+      </div>
+
       <div class="sidebar-footer">
         <div class="connection-status">
           <span id="status-dot" class="status-dot"></span>
           <span id="status-text">Connecting...</span>
         </div>
-        <div class="footer-info">100% on-device</div>
+        <div class="footer-info" id="version-info">100% on-device</div>
       </div>
     </aside>
 

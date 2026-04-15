@@ -335,6 +335,35 @@ app.get('/api/terminals', (req, res) => {
   res.json({ terminals: ptyManager.list(), links: linkManager.listAll() });
 });
 
+// --- Update API (reads state from Electron's global, or checks GitHub directly) ---
+app.get('/api/update/status', async (req, res) => {
+  if (global.termatesUpdate) {
+    const u = global.termatesUpdate;
+    res.json({ status: u.status, currentVersion: u.currentVersion, latestVersion: u.latestVersion, releaseNotes: u.releaseNotes, releaseUrl: u.releaseUrl || null, progress: u.progress, error: u.error });
+  } else {
+    // Server-only mode (no Electron) — check GitHub directly
+    try {
+      const ghRes = await fetch('https://api.github.com/repos/shaurya5/termates/releases/latest', { headers: { 'User-Agent': 'Termates' } });
+      if (!ghRes.ok) { res.json({ status: 'idle', currentVersion: '1.0.0' }); return; }
+      const data = await ghRes.json();
+      const pkg = await import('../package.json', { with: { type: 'json' } });
+      const current = pkg.default.version;
+      const latest = data.tag_name?.replace(/^v/, '');
+      res.json({ status: latest !== current ? 'available' : 'idle', currentVersion: current, latestVersion: latest, releaseUrl: data.html_url, releaseNotes: data.body });
+    } catch (e) { res.json({ status: 'idle', currentVersion: '1.0.0' }); }
+  }
+});
+
+app.post('/api/update/download', (req, res) => {
+  if (global.termatesUpdate?.download) { global.termatesUpdate.download(); res.json({ ok: true }); }
+  else res.json({ ok: false, error: 'Not available in this mode' });
+});
+
+app.post('/api/update/install', (req, res) => {
+  if (global.termatesUpdate?.install) { global.termatesUpdate.install(); res.json({ ok: true }); }
+  else res.json({ ok: false, error: 'Not available in this mode' });
+});
+
 // --- Unix Domain Socket for CLI ---
 function cleanupSocket() {
   try { if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH); } catch (e) { /* ignore */ }
