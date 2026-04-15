@@ -247,6 +247,7 @@ html, body {
   flex-shrink: 0;
 }
 
+.panel-list-item .edit-btn,
 .panel-list-item .close-btn {
   opacity: 0;
   background: none;
@@ -260,7 +261,9 @@ html, body {
   transition: all 0.15s;
 }
 
+.panel-list-item:hover .edit-btn,
 .panel-list-item:hover .close-btn { opacity: 1; }
+.panel-list-item .edit-btn:hover { color: var(--accent); background: rgba(88, 166, 255, 0.15); }
 .panel-list-item .close-btn:hover { color: var(--error); background: rgba(248, 81, 73, 0.15); }
 
 /* Link list items */
@@ -660,7 +663,7 @@ html, body {
 .panel-header .panel-actions {
   display: flex;
   gap: 2px;
-  opacity: 0;
+  opacity: 0.5;
   transition: opacity 0.15s;
 }
 
