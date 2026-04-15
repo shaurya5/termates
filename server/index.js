@@ -291,10 +291,11 @@ function handleWsMessage(ws, msg) {
 
     case 'terminal:list': {
       const saved = stateManager.get();
+      const termList = ptyManager.list();
       sendTo(ws, {
         type: 'terminal:list',
         payload: {
-          terminals: ptyManager.list(),
+          terminals: termList,
           workspaces: saved.workspaces || [],
           activeWorkspaceId: saved.activeWorkspaceId || 'w1',
           nextWorkspaceId: saved.nextWorkspaceId || 2,
@@ -304,6 +305,13 @@ function handleWsMessage(ws, msg) {
           browserWidth: saved.browserWidth || 0.35,
         },
       });
+      // Send buffered content for each terminal so restored xterms aren't blank
+      for (const t of termList) {
+        const term = ptyManager.get(t.id);
+        if (term && term.buffer.length > 0) {
+          sendTo(ws, { type: 'terminal:output', payload: { id: t.id, data: term.buffer.join('') } });
+        }
+      }
       break;
     }
 

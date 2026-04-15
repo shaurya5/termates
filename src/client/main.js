@@ -298,24 +298,8 @@ function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, bro
   if (S.browserOpen) toggleBrowser(true);
   renderBrowserTabs();
 
-  // Force tmux to redraw by cycling resize multiple times.
-  // tmux caches the terminal size — a single resize may not trigger a full redraw.
-  const forceRedraw = (delay) => {
-    setTimeout(() => {
-      for (const [id, t] of S.terminals) {
-        try {
-          t.fitAddon.fit();
-          const cols = t.xterm.cols, rows = t.xterm.rows;
-          send('terminal:resize', { id, cols: Math.max(1, cols - 1), rows: Math.max(1, rows - 1) });
-          setTimeout(() => {
-            send('terminal:resize', { id, cols, rows });
-          }, 150);
-        } catch (e) {}
-      }
-    }, delay);
-  };
-  forceRedraw(300);
-  forceRedraw(800);
+  // Fit all terminals after layout is rendered — buffer content already sent by server
+  setTimeout(() => fitAll(), 500);
 }
 
 // ============================================
