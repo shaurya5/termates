@@ -15,7 +15,13 @@
     "dev": "npm run build:dev && electron .",
     "dev:server": "npm run build:dev && node server/index.js",
     "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:perf": "vitest run tests/perf"
   },
   "build": {
     "appId": "com.termates.app",
@@ -28,6 +34,14 @@
         "zip"
       ],
       "darkModeSupport": true
+    },
+    "linux": {
+      "category": "Development",
+      "icon": "build/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     },
     "files": [
       "electron/**/*",
@@ -53,7 +67,8 @@
   "devDependencies": {
     "electron": "^41.2.0",
     "electron-builder": "^26.8.1",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=18.0.0"
