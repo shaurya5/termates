@@ -34,6 +34,44 @@ const stateManager = new StateManager();
 function persistState() {
   stateManager.setTerminals(ptyManager.list());
   stateManager.setNextTerminalId(ptyManager.nextId);
+  // Sync workspace state with actual terminals
+  stateManager.setWorkspaces(stateManager.get().workspaces);
+}
+
+function addTerminalToWorkspace(terminalId) {
+  const saved = stateManager.get();
+  const wsId = saved.activeWorkspaceId || saved.workspaces[0]?.id;
+  const ws = saved.workspaces.find(w => w.id === wsId);
+  if (ws && !ws.terminalIds.includes(terminalId)) {
+    ws.terminalIds.push(terminalId);
+    stateManager.setWorkspaces(saved.workspaces);
+  }
+}
+
+function removeTerminalFromWorkspaces(terminalId) {
+  const saved = stateManager.get();
+  for (const ws of saved.workspaces) {
+    ws.terminalIds = ws.terminalIds.filter(id => id !== terminalId);
+    ws.links = (ws.links || []).filter(l => l.from !== terminalId && l.to !== terminalId);
+    if (ws.layout) {
+      ws.layout = removeLayoutLeaf(ws.layout, terminalId);
+    }
+  }
+  stateManager.setWorkspaces(saved.workspaces);
+}
+
+function removeLayoutLeaf(node, id) {
+  if (!node) return null;
+  if (node.type === 'leaf') return node.panelId === id ? null : node;
+  if (node.type === 'split') {
+    const l = removeLayoutLeaf(node.children[0], id);
+    const r = removeLayoutLeaf(node.children[1], id);
+    if (!l && !r) return null;
+    if (!l) return r;
+    if (!r) return l;
+    return { ...node, children: [l, r] };
+  }
+  return node;
 }
 
 function subscribeTerminalOutput(terminal) {
@@ -121,6 +159,7 @@ function handleWsMessage(ws, msg) {
         ? ptyManager.createSsh({ name, role, target: sshTarget })
         : ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd, role });
       subscribeTerminalOutput(terminal);
+      addTerminalToWorkspace(terminal.id);
       broadcast({
         type: 'terminal:created',
         payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status },
@@ -164,6 +203,7 @@ function handleWsMessage(ws, msg) {
       const removedLinks = linkManager.getLinksFor(id);
       ptyManager.destroy(id);
       linkManager.removeTerminal(id);
+      removeTerminalFromWorkspaces(id);
       broadcast({ type: 'terminal:destroyed', payload: { id } });
       for (const link of removedLinks) {
         broadcast({ type: 'terminal:unlinked', payload: { from: link.from, to: link.to } });
@@ -334,6 +374,7 @@ function handleCliCommand(socket, msg) {
       case 'create': {
         const terminal = ptyManager.create({ name: msg.name, shell: msg.shell, cwd: msg.cwd, role: msg.role });
         subscribeTerminalOutput(terminal);
+        addTerminalToWorkspace(terminal.id);
         broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status } });
         persistState();
         respond({ ok: true, id: terminal.id, name: terminal.name });
@@ -343,6 +384,7 @@ function handleCliCommand(socket, msg) {
       case 'ssh': {
         const terminal = ptyManager.createSsh({ name: msg.name, role: msg.role, target: msg.target });
         subscribeTerminalOutput(terminal);
+        addTerminalToWorkspace(terminal.id);
         broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status } });
         persistState();
         respond({ ok: true, id: terminal.id, name: terminal.name });
@@ -407,7 +449,7 @@ function handleCliCommand(socket, msg) {
 
       case 'destroy': {
         const t = ptyManager.resolve(msg.target || msg.id);
-        if (t) { linkManager.removeTerminal(t.id); ptyManager.destroy(t.id); broadcast({ type: 'terminal:destroyed', payload: { id: t.id } }); persistState(); respond({ ok: true }); }
+        if (t) { linkManager.removeTerminal(t.id); removeTerminalFromWorkspaces(t.id); ptyManager.destroy(t.id); broadcast({ type: 'terminal:destroyed', payload: { id: t.id } }); persistState(); respond({ ok: true }); }
         else respond({ ok: false, error: 'Terminal not found' });
         break;
       }
