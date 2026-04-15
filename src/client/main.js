@@ -342,6 +342,26 @@ function findLeaf(n) {
   return findLeaf(n.children[0]) || findLeaf(n.children[1]);
 }
 
+function findShallowestLeaf(node, depth = 0) {
+  if (!node) return null;
+  if (node.type === 'leaf') return node.panelId;
+  // Find the shallowest (least nested) leaf — gives the biggest panel to split
+  const left = { id: findShallowestLeaf(node.children[0], depth + 1), depth: leafDepth(node.children[0]) };
+  const right = { id: findShallowestLeaf(node.children[1], depth + 1), depth: leafDepth(node.children[1]) };
+  return left.depth <= right.depth ? left.id : right.id;
+}
+
+function leafDepth(node) {
+  if (!node) return 999;
+  if (node.type === 'leaf') return 0;
+  return 1 + Math.min(leafDepth(node.children[0]), leafDepth(node.children[1]));
+}
+
+function treeDepth(node) {
+  if (!node || node.type === 'leaf') return 0;
+  return 1 + Math.max(treeDepth(node.children[0]), treeDepth(node.children[1]));
+}
+
 function pruneLayout(node, validIds) {
   if (!node) return null;
   if (node.type === 'leaf') return validIds.has(node.panelId) ? node : null;
@@ -368,13 +388,17 @@ function collectLayoutIds(node) {
 function addTerminalToLayout(id, ws) {
   ws = ws || activeWs();
   if (!ws) return;
-  const dir = S._splitDir || 'horizontal';
+  const dir = S._splitDir || null;
   S._splitDir = null;
-  const target = S.activeTerminalId && ws.terminalIds.includes(S.activeTerminalId) ? S.activeTerminalId : findLeaf(ws.layout);
+
   if (!ws.layout) {
     ws.layout = { type: 'leaf', panelId: id };
-  } else if (target) {
-    ws.layout = splitInTree(ws.layout, target, dir, { type: 'leaf', panelId: id });
+  } else {
+    // Find the shallowest leaf (least nested = biggest panel) to split
+    const target = findShallowestLeaf(ws.layout);
+    // Auto-alternate direction based on tree depth for balanced layout
+    const autoDir = dir || (treeDepth(ws.layout) % 2 === 0 ? 'horizontal' : 'vertical');
+    ws.layout = splitInTree(ws.layout, target, autoDir, { type: 'leaf', panelId: id });
   }
   renderLayout();
   persistWorkspaces();

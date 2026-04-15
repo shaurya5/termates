@@ -81,22 +81,30 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
 
   const socketPath = path.join(SSH_SOCKETS_DIR, '%r@%h:%p');
 
-  // Try to attach to existing remote tmux session, or create new one
-  const tmuxCmd = remoteCwd
-    ? `tmux new-session -A -s ${sessionName} -c ${shellEscape(remoteCwd)}`
-    : `tmux new-session -A -s ${sessionName}`;
+  let remoteCmd;
+  // Kill stale session, cd, create tmux with mouse/scroll config inline
+  const kill = `tmux kill-session -t ${sessionName} 2>/dev/null;`;
+  const tmuxOpts = `\\; set mouse on \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
+  if (remoteCwd) {
+    const expandedCwd = remoteCwd.replace(/^~/, '$HOME');
+    remoteCmd = `${kill} cd ${expandedCwd} && tmux new-session -s ${sessionName} ${tmuxOpts}`;
+  } else {
+    remoteCmd = `${kill} tmux new-session -s ${sessionName} ${tmuxOpts}`;
+  }
 
-  return [
-    'ssh',
-    '-o', `ControlMaster=auto`,
-    '-o', `ControlPath=${socketPath}`,
-    '-o', `ControlPersist=600`,
-    '-o', 'ServerAliveInterval=30',
-    '-o', 'ServerAliveCountMax=3',
-    '-t',
-    target,
-    tmuxCmd,
-  ];
+  return {
+    sshArgs: [
+      'ssh',
+      '-o', 'ControlMaster=auto',
+      '-o', `ControlPath=${socketPath}`,
+      '-o', 'ControlPersist=600',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-t',
+      target,
+    ],
+    remoteCmd,
+  };
 }
 
 function shellEscape(s) {

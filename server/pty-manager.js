@@ -201,7 +201,6 @@ export class PtyManager {
   // ---- Create remote terminal (SSH + remote tmux, multiplexed) ----
   createRemote({ id, name, role, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
     const termId = id || `t${this.nextId++}`;
-    const tmuxSession = this.tmuxAvailable ? this._tmuxName(termId) : null;
     const termCols = cols || 80;
     const termRows = rows || 24;
 
@@ -213,31 +212,13 @@ export class PtyManager {
     env.COLORTERM = 'truecolor';
     if (role) env.TERMATES_ROLE = role;
 
-    // Import dynamically to avoid circular deps
-    const sshArgs = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
+    const { sshArgs, remoteCmd } = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
 
-    let spawnFile, spawnArgs;
-    if (this.tmuxAvailable) {
-      // Wrap in local tmux for local persistence
-      if (this._tmuxSessionExists(tmuxSession)) {
-        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
-      }
-      // Create local tmux session that runs the SSH command
-      const sshCmd = sshArgs.map(a => a.includes(' ') ? `"${a}"` : a).join(' ');
-      try {
-        execSync(`tmux -f "${TMUX_CONF}" new-session -d -s "${tmuxSession}" -x ${termCols} -y ${termRows} ${sshCmd}`, {
-          env, stdio: 'pipe',
-        });
-      } catch (e) {
-        // Fallback
-        execSync(`tmux new-session -d -s "${tmuxSession}" ${sshCmd}`, { env, stdio: 'pipe' });
-      }
-      spawnFile = 'tmux';
-      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
-    } else {
-      spawnFile = sshArgs[0];
-      spawnArgs = sshArgs.slice(1);
-    }
+    // For remote terminals, skip the local tmux wrapper entirely.
+    // Just spawn SSH directly via PTY — the REMOTE tmux handles persistence.
+    // This avoids all the quoting hell of nesting tmux → ssh → remote tmux.
+    const spawnFile = sshArgs[0]; // 'ssh'
+    const spawnArgs = [...sshArgs.slice(1), remoteCmd];
 
     const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
       name: 'xterm-256color',
@@ -247,7 +228,7 @@ export class PtyManager {
       env,
     });
 
-    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, tmuxSession);
+    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, null);
     terminal.remote = true;
     terminal.sshTarget = sshTarget;
     this.terminals.set(termId, terminal);
