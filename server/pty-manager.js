@@ -9,20 +9,16 @@ const TMUX_PREFIX = 'termates-';
 const STATE_DIR = path.join(os.homedir(), '.termates');
 const TMUX_CONF = path.join(STATE_DIR, 'tmux.conf');
 
-// Transparent tmux config: no status bar, mouse passthrough, no escape delay
+// Transparent tmux config: no status bar, no mouse capture, no escape delay
+// Mouse is OFF so xterm.js handles selection and scroll natively.
 export const TMUX_CONF_CONTENT = `
 set -g status off
-set -g mouse on
+set -g mouse off
 set -g escape-time 0
 set -g history-limit 50000
 set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-256color:Tc"
 set -g allow-passthrough on
-unbind -n MouseDown3Pane
-unbind -n M-MouseDown3Pane
-unbind -n MouseDown3Status
-unbind -n MouseDown3StatusLeft
-unbind -n MouseDown3StatusRight
 `.trim();
 
 export class PtyManager {

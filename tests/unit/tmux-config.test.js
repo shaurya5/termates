@@ -22,20 +22,12 @@ describe('TMUX_CONF_CONTENT', () => {
       expect(TMUX_CONF_CONTENT).toContain('set -g status off');
     });
 
-    it('enables mouse support with "set -g mouse on"', () => {
-      expect(TMUX_CONF_CONTENT).toContain('set -g mouse on');
+    it('disables mouse so xterm.js handles selection and scroll', () => {
+      expect(TMUX_CONF_CONTENT).toContain('set -g mouse off');
     });
 
     it('removes escape delay with "set -g escape-time 0"', () => {
       expect(TMUX_CONF_CONTENT).toContain('set -g escape-time 0');
-    });
-
-    it('unbinds right-click on pane with "unbind -n MouseDown3Pane"', () => {
-      expect(TMUX_CONF_CONTENT).toContain('unbind -n MouseDown3Pane');
-    });
-
-    it('unbinds right-click on status bar with "unbind -n MouseDown3Status"', () => {
-      expect(TMUX_CONF_CONTENT).toContain('unbind -n MouseDown3Status');
     });
 
     it('sets a large scrollback buffer with "set -g history-limit 50000"', () => {

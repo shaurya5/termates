@@ -373,9 +373,9 @@ describe('buildRemoteTmuxCommand()', () => {
     expect(remoteCmd).toContain('tmux new-session -s my-session');
   });
 
-  it('remoteCmd includes mouse on config', () => {
+  it('remoteCmd disables mouse so xterm.js handles it', () => {
     const { remoteCmd } = buildRemoteTmuxCommand('user@host', 'termates-t1');
-    expect(remoteCmd).toContain('set mouse on');
+    expect(remoteCmd).toContain('set mouse off');
   });
 
   it('remoteCmd includes status off config', () => {

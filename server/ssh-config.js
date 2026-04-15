@@ -90,7 +90,7 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
   let remoteCmd;
   // Kill stale session, cd, create tmux with mouse/scroll config inline
   const kill = `tmux kill-session -t ${sessionName} 2>/dev/null;`;
-  const tmuxOpts = `\\; set mouse on \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
+  const tmuxOpts = `\\; set mouse off \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
   if (remoteCwd) {
     const expandedCwd = remoteCwd.replace(/^~/, '$HOME');
     remoteCmd = `${kill} cd ${expandedCwd} && tmux new-session -s ${sessionName} ${tmuxOpts}`;

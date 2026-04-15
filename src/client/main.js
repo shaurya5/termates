@@ -92,6 +92,7 @@ function createXterm(id) {
   const xterm = new Terminal({
     fontFamily: "'JetBrains Mono','SF Mono','Menlo','Cascadia Code','Consolas',monospace",
     fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
+    scrollback: 10000,
     theme: xtermTheme, allowProposedApi: true,
     macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
