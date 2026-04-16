@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 function handleWsMessage(ws, msg, ctx) {
   const { ptyManager, linkManager, stateManager, broadcast, sendTo,
           persistState, addTerminalToWorkspace, addLinkToWorkspace, removeLinkFromWorkspaces, removeTerminalFromWorkspaces,
-          subscribeTerminalOutput, recordWorkspaceMessage } = ctx;
+          subscribeTerminalOutput } = ctx;
   const { type, payload } = msg;
 
   switch (type) {
@@ -37,7 +37,13 @@ function handleWsMessage(ws, msg, ctx) {
       addTerminalToWorkspace(terminal.id);
       broadcast({
         type: 'terminal:created',
-        payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status },
+        payload: {
+          id: terminal.id,
+          name: terminal.name,
+          role: terminal.role,
+          status: terminal.status,
+          inTui: terminal.inTui,
+        },
       });
       persistState();
       break;
@@ -53,6 +59,14 @@ function handleWsMessage(ws, msg, ctx) {
 
     case 'terminal:resize': {
       ptyManager.resize(payload.id, payload.cols, payload.rows);
+      break;
+    }
+
+    case 'terminal:refresh': {
+      // Nudge the PTY to re-emit its current screen. Client calls this right
+      // after a fresh xterm mount (page reload); without it the pane can sit
+      // blank until the inner TUI happens to write something.
+      ptyManager.refresh(payload.id);
       break;
     }
 
@@ -107,23 +121,6 @@ function handleWsMessage(ws, msg, ctx) {
       break;
     }
 
-    case 'terminal:send-to-linked': {
-      const { from, to, text } = payload;
-      const rawText = String(text || '');
-      if (linkManager.areLinked(from, to) && rawText.trim()) {
-        ptyManager.write(to, rawText);
-        const stored = recordWorkspaceMessage(from, to, rawText);
-        const fallbackText = rawText.replace(/\r?\n$/, '');
-        broadcast({
-          type: 'terminal:message-sent',
-          payload: stored
-            ? { workspaceId: stored.workspaceId, ...stored.message }
-            : { from, to, text: fallbackText, timestamp: Date.now() },
-        });
-      }
-      break;
-    }
-
     case 'terminal:status': {
       if (ptyManager.setStatus(payload.id, payload.status)) {
         broadcast({ type: 'terminal:status-changed', payload: { id: payload.id, status: payload.status } });
@@ -146,14 +143,21 @@ function handleWsMessage(ws, msg, ctx) {
           activeBrowserTab: saved.activeBrowserTab || 0,
           browserOpen: saved.browserOpen || false,
           browserWidth: saved.browserWidth || 0.35,
+          agentPresets: saved.agentPresets,
         },
       });
-      // Send buffered content for each terminal so restored xterms aren't blank
-      for (const t of termList) {
-        const term = ptyManager.get(t.id);
-        if (term && term.buffer.length > 0) {
-          sendTo(ws, { type: 'terminal:output', payload: { id: t.id, data: term.buffer.join('') } });
-        }
+      // No buffer replay — tmux's attach-session emits a full screen redraw
+      // at the current pane size when the server (re)attaches the PTY, which
+      // is the correct source of truth for restoring visible state. Replaying
+      // the raw PTY byte stream captured at a prior size caused CSI cursor
+      // codes to land on wrong rows and produced the overlapping-lines glitch.
+      break;
+    }
+
+    case 'settings:update': {
+      if (payload.agentPresets !== undefined) {
+        const agentPresets = stateManager.setAgentPresets(payload.agentPresets);
+        broadcast({ type: 'settings:updated', payload: { agentPresets } });
       }
       break;
     }
@@ -164,7 +168,6 @@ function handleWsMessage(ws, msg, ctx) {
       const nextWorkspaces = (payload.workspaces || []).map((workspace) => ({
         ...existingById.get(workspace.id),
         ...workspace,
-        messages: existingById.get(workspace.id)?.messages || workspace.messages || [],
       }));
       stateManager.setWorkspaces(nextWorkspaces);
       if (payload.activeWorkspaceId !== undefined) stateManager.setActiveWorkspaceId(payload.activeWorkspaceId);

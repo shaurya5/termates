@@ -1,53 +1,66 @@
 import pty from 'node-pty';
 import os from 'os';
 import path from 'path';
-import fs from 'fs';
-import { execSync, execFileSync } from 'child_process';
 import { buildRemoteTmuxCommand } from './ssh-config.js';
+import { detectBackend, TMUX_CONF_CONTENT as _TMUX_CONF_CONTENT } from './persistence-backend.js';
+
+// Re-export for backwards-compat with tests that import it.
+export const TMUX_CONF_CONTENT = _TMUX_CONF_CONTENT;
 
 const TMUX_PREFIX = 'termates-';
 const STATE_DIR = path.join(os.homedir(), '.termates');
-const TMUX_CONF = path.join(STATE_DIR, 'tmux.conf');
+const TERMATES_SOCKET = path.join(os.tmpdir(), 'termates.sock');
+const STRIP_ENV_KEYS = new Set([
+  'NO_COLOR',
+  'TMUX',
+  'TMUX_PANE',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'TERMINAL_EMULATOR',
+  'WT_SESSION',
+]);
+const STRIP_ENV_PREFIXES = [
+  'KITTY_',
+  'VSCODE_',
+  'WEZTERM_',
+  'ZELLIJ_',
+];
 
-// Transparent tmux config: no status bar, no mouse capture, no escape delay
-// Mouse is OFF so xterm.js handles selection and scroll natively.
-export const TMUX_CONF_CONTENT = `
-set -g status off
-set -g mouse off
-set -g escape-time 0
-set -g history-limit 50000
-set -g default-terminal "xterm-256color"
-set -ga terminal-overrides ",xterm-256color:Tc"
-set -g allow-passthrough on
-`.trim();
+export function buildTerminalEnv({ id, name, role, baseEnv = process.env }) {
+  const env = { ...baseEnv };
+
+  for (const key of Object.keys(env)) {
+    if (STRIP_ENV_KEYS.has(key) || STRIP_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete env[key];
+    }
+  }
+
+  env.TERMATES_TERMINAL_ID = id;
+  env.TERMATES_TERMINAL_NAME = name || `Terminal ${id}`;
+  env.TERMATES_SOCKET = TERMATES_SOCKET;
+  env.TERM = 'xterm-256color';
+  env.COLORTERM = 'truecolor';
+  env.TERM_PROGRAM = 'Termates';
+
+  if (role) env.TERMATES_ROLE = role;
+  else delete env.TERMATES_ROLE;
+
+  return env;
+}
 
 export class PtyManager {
   constructor() {
     this.terminals = new Map();
     this.nextId = 1;
-    this.tmuxAvailable = this._checkTmux();
-    if (this.tmuxAvailable) {
-      this._writeTmuxConf();
-      console.log('  [tmux] Persistent terminals enabled');
-    } else {
-      console.log('  [tmux] Not found - terminals will not persist across restarts');
-    }
-  }
-
-  _checkTmux() {
-    try {
-      execSync('tmux -V', { stdio: 'pipe' });
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  _writeTmuxConf() {
-    try {
-      if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
-      fs.writeFileSync(TMUX_CONF, TMUX_CONF_CONTENT);
-    } catch (e) { /* ignore */ }
+    this.backend = detectBackend();
+    // tmuxAvailable is kept as a boolean for tests/legacy callers that only
+    // ask "is persistence working?". It's true for any real backend, false for
+    // the no-op NoBackend.
+    this.tmuxAvailable = this.backend.name !== 'none';
+    const label = this.backend.name;
+    if (label === 'abduco') console.log('  [abduco] Persistent terminals enabled');
+    else if (label === 'tmux') console.log('  [tmux] Persistent terminals enabled (fallback; install abduco for better rendering)');
+    else console.log('  [persistence] No abduco/tmux found — terminals will not survive restart');
   }
 
   get size() {
@@ -58,80 +71,59 @@ export class PtyManager {
     this.nextId = n;
   }
 
-  _tmuxName(id) {
+  _sessionName(id) {
     return `${TMUX_PREFIX}${id}`;
   }
 
+  // Back-compat alias — older callers use _tmuxName.
+  _tmuxName(id) { return this._sessionName(id); }
+
   _tmuxSessionExists(sessionName) {
-    try {
-      execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
-      return true;
-    } catch (e) {
-      return false;
-    }
+    return this.backend.sessionExists(sessionName);
   }
 
-  // List all termates-* tmux sessions that are still alive
+  // List all termates-* sessions alive in the active backend.
   listAliveTmuxSessions() {
-    if (!this.tmuxAvailable) return [];
-    try {
-      const out = execSync(
-        'tmux list-sessions -F "#{session_name}" 2>/dev/null',
-        { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      ).trim();
-      if (!out) return [];
-      return out.split('\n').filter(s => s.startsWith(TMUX_PREFIX));
-    } catch (e) {
-      return [];
-    }
+    return this.backend.listSessions().filter((s) => s.startsWith(TMUX_PREFIX));
   }
 
-  // Extract the terminal id from a tmux session name
   tmuxSessionToId(sessionName) {
     return sessionName.replace(TMUX_PREFIX, '');
   }
 
-  // ---- Create new terminal (tmux-backed if available) ----
+  // ---- Create a fresh terminal, persisted through the active backend ----
   create({ id, name, shell, cwd, role, cols, rows, sshTarget }) {
     const termId = id || `t${this.nextId++}`;
-    const tmuxSession = this.tmuxAvailable ? this._tmuxName(termId) : null;
+    const sessionName = this.tmuxAvailable ? this._sessionName(termId) : null;
 
     const termCols = cols || 80;
     const termRows = rows || 24;
     const workDir = cwd || process.env.HOME || process.cwd();
 
-    const env = { ...process.env };
-    env.TERMATES_TERMINAL_ID = termId;
-    env.TERMATES_TERMINAL_NAME = name || `Terminal ${termId}`;
-    env.TERMATES_SOCKET = path.join(os.tmpdir(), 'termates.sock');
-    env.TERM = 'xterm-256color';
-    env.COLORTERM = 'truecolor';
-    if (role) env.TERMATES_ROLE = role;
+    const env = buildTerminalEnv({
+      id: termId,
+      name: name || `Terminal ${termId}`,
+      role,
+    });
 
-    let spawnFile, spawnArgs;
+    // Recreate from scratch — if a stale session with this id exists (e.g.
+    // crashed earlier run), kill it first so we don't attach to junk.
+    if (sessionName && this.backend.sessionExists(sessionName)) {
+      this.backend.killSession(sessionName);
+    }
 
-    if (this.tmuxAvailable) {
-      if (this._tmuxSessionExists(tmuxSession)) {
-        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
-      }
-
-      // Create detached session (synchronous — session exists immediately after)
-      // then attach via PTY. Pass env with TERM so colors work inside tmux.
-      const createCmd = ['tmux', '-f', TMUX_CONF, 'new-session', '-d', '-s', tmuxSession,
-        '-x', String(termCols), '-y', String(termRows)];
-      if (sshTarget) createCmd.push('ssh', sshTarget);
-      try {
-        execSync(createCmd.join(' '), { cwd: workDir, env, stdio: 'pipe' });
-      } catch (e) {
-        execSync(`tmux new-session -d -s "${tmuxSession}"`, { cwd: workDir, env, stdio: 'pipe' });
-      }
-
-      spawnFile = 'tmux';
-      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
+    let spawnFile, spawnArgs, spawnEnv;
+    if (sessionName) {
+      const innerCmd = sshTarget ? 'ssh' : (shell || process.env.SHELL || '/bin/zsh');
+      const innerArgs = sshTarget ? [sshTarget] : [];
+      ({ spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
+        sessionName, innerCmd, innerArgs,
+        baseEnv: env, cols: termCols, rows: termRows,
+      }));
     } else {
-      const defaultShell = shell || process.env.SHELL || '/bin/zsh';
-      spawnFile = defaultShell;
+      spawnFile = shell || process.env.SHELL || '/bin/zsh';
       spawnArgs = [];
+      spawnEnv = env;
     }
 
     const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
@@ -139,40 +131,44 @@ export class PtyManager {
       cols: termCols,
       rows: termRows,
       cwd: workDir,
-      env,
+      env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(termId, name, role, ptyProcess, tmuxSession);
+    const terminal = this._makeTerminal(termId, name, role, ptyProcess, sessionName);
     this.terminals.set(termId, terminal);
     return terminal;
   }
 
-  // ---- Reattach to existing tmux session ----
+  // ---- Reattach to a pre-existing session left behind by a prior run ----
   reattach({ id, name, role, status, cols, rows }) {
     if (!this.tmuxAvailable) return null;
-    const tmuxSession = this._tmuxName(id);
-    if (!this._tmuxSessionExists(tmuxSession)) return null;
+    const sessionName = this._sessionName(id);
+    if (!this.backend.sessionExists(sessionName)) return null;
 
-    // Apply our config to the existing session
-    try {
-      execSync(`tmux -f "${TMUX_CONF}" set -t "${tmuxSession}" status off 2>/dev/null`, { stdio: 'pipe' });
-      execSync(`tmux set -t "${tmuxSession}" mouse off 2>/dev/null`, { stdio: 'pipe' });
-      execSync(`tmux set -t "${tmuxSession}" escape-time 0 2>/dev/null`, { stdio: 'pipe' });
-    } catch (e) { /* best effort */ }
+    const env = buildTerminalEnv({
+      id,
+      name: name || `Terminal ${id}`,
+      role,
+    });
 
-    const env = { ...process.env };
-    env.TERM = 'xterm-256color';
-    env.COLORTERM = 'truecolor';
+    // With abduco, -A attaches to the existing session and ignores the inner
+    // command. With tmux, buildSpawn skips create and just builds the attach
+    // command. Either way we don't start a new shell here.
+    const shell = process.env.SHELL || '/bin/zsh';
+    const { spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
+      sessionName, innerCmd: shell, innerArgs: [],
+      baseEnv: env, cols: cols || 80, rows: rows || 24,
+    });
 
-    const ptyProcess = pty.spawn('tmux', ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession], {
+    const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
       cwd: process.env.HOME,
-      env,
+      env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(id, name, role, ptyProcess, tmuxSession);
+    const terminal = this._makeTerminal(id, name, role, ptyProcess, sessionName);
     terminal.status = status || 'idle';
     this.terminals.set(id, terminal);
     return terminal;
@@ -189,47 +185,39 @@ export class PtyManager {
     });
   }
 
-  // ---- Create remote terminal (local tmux → SSH → remote tmux) ----
+  // ---- Create remote terminal (persisted locally via the active backend,
+  //      then ssh into the remote host and run remote tmux there) ----
   createRemote({ id, name, role, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
     const termId = id || `t${this.nextId++}`;
-    const tmuxSession = this.tmuxAvailable ? this._tmuxName(termId) : null;
+    const sessionName = this.tmuxAvailable ? this._sessionName(termId) : null;
     const termCols = cols || 80;
     const termRows = rows || 24;
 
-    const env = { ...process.env };
-    env.TERMATES_TERMINAL_ID = termId;
-    env.TERMATES_TERMINAL_NAME = name || `Remote: ${sshTarget}`;
-    env.TERMATES_SOCKET = path.join(os.tmpdir(), 'termates.sock');
-    env.TERM = 'xterm-256color';
-    env.COLORTERM = 'truecolor';
-    if (role) env.TERMATES_ROLE = role;
+    const env = buildTerminalEnv({
+      id: termId,
+      name: name || `Remote: ${sshTarget}`,
+      role,
+    });
 
     const { sshArgs, remoteCmd } = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
     const sshFullArgs = [...sshArgs.slice(1), remoteCmd];
 
-    let spawnFile, spawnArgs;
-    if (this.tmuxAvailable) {
-      if (this._tmuxSessionExists(tmuxSession)) {
-        try { execSync(`tmux kill-session -t "${tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); } catch (e) {}
-      }
+    if (sessionName && this.backend.sessionExists(sessionName)) {
+      this.backend.killSession(sessionName);
+    }
 
-      // Same pattern as local: detached create + attach.
-      // Use execFileSync (not execSync) to pass args as array — no shell, no quoting issues.
-      const createArgs = ['-f', TMUX_CONF, 'new-session', '-d', '-s', tmuxSession,
-        '-x', String(termCols), '-y', String(termRows),
-        sshArgs[0], ...sshFullArgs];
-      try {
-        execFileSync('tmux', createArgs, { env, stdio: 'pipe' });
-      } catch (e) {
-        // Fallback: try without config
-        execFileSync('tmux', ['new-session', '-d', '-s', tmuxSession, sshArgs[0], ...sshFullArgs], { env, stdio: 'pipe' });
-      }
-
-      spawnFile = 'tmux';
-      spawnArgs = ['-f', TMUX_CONF, 'attach-session', '-t', tmuxSession];
+    let spawnFile, spawnArgs, spawnEnv;
+    if (sessionName) {
+      ({ spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
+        sessionName,
+        innerCmd: sshArgs[0],
+        innerArgs: sshFullArgs,
+        baseEnv: env, cols: termCols, rows: termRows,
+      }));
     } else {
       spawnFile = sshArgs[0];
       spawnArgs = sshFullArgs;
+      spawnEnv = env;
     }
 
     const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
@@ -237,10 +225,10 @@ export class PtyManager {
       cols: termCols,
       rows: termRows,
       cwd: process.env.HOME,
-      env,
+      env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, tmuxSession);
+    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, sessionName);
     terminal.remote = true;
     terminal.sshTarget = sshTarget;
     this.terminals.set(termId, terminal);
@@ -254,6 +242,7 @@ export class PtyManager {
       name: name || `Terminal ${id}`,
       role: role || null,
       status: 'idle',
+      inTui: false,
       tmuxSession: tmuxSession || null,
       pty: ptyProcess,
       buffer: [],
@@ -284,6 +273,16 @@ export class PtyManager {
       if (terminal.buffer.length > terminal.maxBufferLines) {
         terminal.buffer = terminal.buffer.slice(-Math.floor(terminal.maxBufferLines * 0.75));
       }
+      // Track alt-screen state by observing the raw escape sequences. smcup
+      // variants enter (true), rmcup variants exit (false). This replaces the
+      // old tmux display-message query and works with any backend. We scan
+      // last-match-wins so if a chunk contains enter-then-exit we end up in
+      // the right state.
+      let lastIdx = -1, lastOn = null;
+      for (const m of data.matchAll(/\x1b\[\?(?:1049|1047|47)([hl])/g)) {
+        if (m.index > lastIdx) { lastIdx = m.index; lastOn = m[1] === 'h'; }
+      }
+      if (lastOn !== null) terminal.inTui = lastOn;
       for (const cb of terminal.listeners) {
         try { cb(data); } catch (e) { /* ignore */ }
       }
@@ -337,6 +336,37 @@ export class PtyManager {
     return false;
   }
 
+  // Force the inner program to redraw after a new WebSocket client attaches
+  // to an existing session. Without this the pane sits blank (the attached
+  // shell/TUI isn't emitting fresh bytes) until the user types something.
+  //
+  // We combine two signals because no single one covers all cases:
+  //   1. SIGWINCH via a 1-row size nudge — TUIs (Claude Code, vim, less)
+  //      handle it as "repaint at new size". We separate the two resizes
+  //      with a small delay because the kernel can coalesce back-to-back
+  //      TIOCSWINSZ calls into a single SIGWINCH, and if the final size
+  //      matches what the process already knows, it sees no change and
+  //      doesn't redraw.
+  //   2. Ctrl+L (0x0c, form feed) — readline (bash/zsh) handles this as
+  //      "redraw the current line" so an idle shell prompt re-emits. Most
+  //      full-screen TUIs bind it to "clear + repaint".
+  refresh(id) {
+    const t = this.terminals.get(id);
+    if (!t) return false;
+    try {
+      const c = Math.max(1, t.pty.cols || 80);
+      const r = Math.max(1, t.pty.rows || 24);
+      t.pty.resize(c, Math.max(1, r - 1));
+      setTimeout(() => {
+        try {
+          t.pty.resize(c, r);
+          t.pty.write('\x0c');
+        } catch (e) {}
+      }, 30);
+      return true;
+    } catch (e) { return false; }
+  }
+
   setStatus(id, status) {
     const t = this.terminals.get(id);
     if (t) { t.status = status; return true; }
@@ -355,15 +385,35 @@ export class PtyManager {
     return false;
   }
 
-  // Destroy terminal AND its tmux session
+  setInTui(id, value) {
+    const t = this.terminals.get(id);
+    if (!t) return null;
+    const prev = t.inTui;
+    t.inTui = !!value;
+    return { prev, current: t.inTui, changed: prev !== t.inTui };
+  }
+
+  // Returns true if the inner program is currently on the alt screen
+  // (i.e. a full-screen TUI like claude/codex/vim is running), false otherwise.
+  // Resolves to null if the terminal is gone.
+  //
+  // We track this in _makeTerminal by watching the PTY output for smcup/rmcup
+  // sequences. That works with any backend (abduco, tmux, none) because it
+  // doesn't depend on the multiplexer's own state tracking — we observe the
+  // same escape sequences the multiplexer would.
+  paneAlternateOn(id) {
+    const t = this.terminals.get(id);
+    if (!t) return Promise.resolve(null);
+    return Promise.resolve(!!t.inTui);
+  }
+
+  // Destroy terminal AND its persisted session (abduco/tmux).
   destroy(id) {
     const t = this.terminals.get(id);
     if (!t) return false;
     try { t.pty.kill(); } catch (e) { /* already dead */ }
-    // Also kill the tmux session
     if (t.tmuxSession && this.tmuxAvailable) {
-      try { execSync(`tmux kill-session -t "${t.tmuxSession}" 2>/dev/null`, { stdio: 'pipe' }); }
-      catch (e) { /* ok */ }
+      this.backend.killSession(t.tmuxSession);
     }
     t.listeners.clear();
     this.terminals.delete(id);
@@ -392,6 +442,7 @@ export class PtyManager {
       name: t.name,
       role: t.role,
       status: t.status,
+      inTui: t.inTui,
       tmuxSession: t.tmuxSession,
       createdAt: t.createdAt,
     }));

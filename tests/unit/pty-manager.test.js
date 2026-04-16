@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 let _lastMockPty = null;
+let _lastSpawnArgs = null;
 
 function createMockPty() {
   const listeners = { data: [], exit: [] };
@@ -35,7 +36,8 @@ function createMockPty() {
 
 vi.mock('node-pty', () => ({
   default: {
-    spawn(..._args) {
+    spawn(...args) {
+      _lastSpawnArgs = args;
       _lastMockPty = createMockPty();
       return _lastMockPty;
     },
@@ -59,7 +61,7 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-import { PtyManager } from '../../server/pty-manager.js';
+import { PtyManager, buildTerminalEnv } from '../../server/pty-manager.js';
 import { execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +71,7 @@ import { execSync } from 'child_process';
 let mgr;
 
 beforeEach(() => {
+  _lastSpawnArgs = null;
   mgr = new PtyManager();
 });
 
@@ -272,14 +275,10 @@ describe('resize()', () => {
 // ---------------------------------------------------------------------------
 
 describe('reattach()', () => {
-  it('reapplies transparent tmux config with mouse off', () => {
-    vi.mocked(execSync).mockClear();
-
+  it('returns a terminal when the session exists', () => {
     const terminal = mgr.reattach({ id: 'rt1', name: 'Restored' });
-
     expect(terminal).not.toBeNull();
-    expect(vi.mocked(execSync).mock.calls.some(([cmd]) => cmd.includes('mouse off'))).toBe(true);
-    expect(vi.mocked(execSync).mock.calls.some(([cmd]) => cmd.includes('mouse on'))).toBe(false);
+    expect(terminal.id).toBe('rt1');
   });
 });
 
@@ -504,6 +503,41 @@ describe('create() terminal object', () => {
     const t = mgr.create({ id: 'co3', name: 'Test' });
     expect(t.role).toBeNull();
   });
+
+  it('sanitizes inherited terminal env before spawning', () => {
+    const originalNoColor = process.env.NO_COLOR;
+    const originalTermProgram = process.env.TERM_PROGRAM;
+    const originalTmux = process.env.TMUX;
+    const originalWeztermPane = process.env.WEZTERM_PANE;
+
+    process.env.NO_COLOR = '1';
+    process.env.TERM_PROGRAM = 'tmux';
+    process.env.TMUX = '/tmp/outer-tmux';
+    process.env.WEZTERM_PANE = '12';
+
+    try {
+      mgr.create({ id: 'co4', name: 'Sanitized' });
+      const [, , options] = _lastSpawnArgs;
+
+      expect(options.env.NO_COLOR).toBeUndefined();
+      expect(options.env.TMUX).toBeUndefined();
+      expect(options.env.WEZTERM_PANE).toBeUndefined();
+      expect(options.env.TERM_PROGRAM).toBe('Termates');
+      expect(options.env.COLORTERM).toBe('truecolor');
+      expect(options.env.TERM).toBe('xterm-256color');
+      expect(options.env.TERMATES_TERMINAL_ID).toBe('co4');
+      expect(options.env.TERMATES_TERMINAL_NAME).toBe('Sanitized');
+    } finally {
+      if (originalNoColor === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = originalNoColor;
+      if (originalTermProgram === undefined) delete process.env.TERM_PROGRAM;
+      else process.env.TERM_PROGRAM = originalTermProgram;
+      if (originalTmux === undefined) delete process.env.TMUX;
+      else process.env.TMUX = originalTmux;
+      if (originalWeztermPane === undefined) delete process.env.WEZTERM_PANE;
+      else process.env.WEZTERM_PANE = originalWeztermPane;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -570,5 +604,31 @@ describe('setNextId()', () => {
     mgr2.setNextId(100);
     const t = mgr2.create({ name: 'Test' });
     expect(t.id).toBe('t100');
+  });
+});
+
+describe('buildTerminalEnv()', () => {
+  it('drops leaked outer-terminal markers and keeps shell essentials', () => {
+    const env = buildTerminalEnv({
+      id: 'env1',
+      name: 'Test Env',
+      role: 'coder',
+      baseEnv: {
+        PATH: '/usr/bin:/bin',
+        HOME: '/tmp/home',
+        NO_COLOR: '1',
+        TERM_PROGRAM: 'tmux',
+        TMUX: '/tmp/outer',
+        KITTY_WINDOW_ID: '99',
+      },
+    });
+
+    expect(env.PATH).toBe('/usr/bin:/bin');
+    expect(env.HOME).toBe('/tmp/home');
+    expect(env.NO_COLOR).toBeUndefined();
+    expect(env.TMUX).toBeUndefined();
+    expect(env.KITTY_WINDOW_ID).toBeUndefined();
+    expect(env.TERM_PROGRAM).toBe('Termates');
+    expect(env.TERMATES_ROLE).toBe('coder');
   });
 });

@@ -203,7 +203,40 @@ describe('WebSocket', () => {
       const msg = await ws.next(m => m.type === 'terminal:list');
       expect(msg.payload).toHaveProperty('workspaces');
       expect(Array.isArray(msg.payload.workspaces)).toBe(true);
+      expect(msg.payload.agentPresets).toEqual(expect.objectContaining({
+        claude: expect.objectContaining({ command: expect.any(String) }),
+        codex: expect.objectContaining({ command: expect.any(String) }),
+      }));
     } finally {
+      ws.close();
+    }
+  });
+
+  it('settings:update persists agent presets and broadcasts settings:updated', async () => {
+    const ws = await openWs();
+    let original;
+    try {
+      ws.send('terminal:list');
+      const initial = await ws.next(m => m.type === 'terminal:list');
+      original = initial.payload.agentPresets;
+
+      const nextPresets = {
+        claude: { command: 'claude --print {{workspace_name}}' },
+        codex: { command: 'codex --model gpt-5-codex' },
+      };
+
+      ws.send('settings:update', { agentPresets: nextPresets });
+      const updated = await ws.next(m => m.type === 'settings:updated');
+      expect(updated.payload.agentPresets).toEqual(nextPresets);
+
+      ws.send('terminal:list');
+      const listed = await ws.next(m => m.type === 'terminal:list');
+      expect(listed.payload.agentPresets).toEqual(nextPresets);
+    } finally {
+      if (original) {
+        ws.send('settings:update', { agentPresets: original });
+        await ws.next(m => m.type === 'settings:updated').catch(() => {});
+      }
       ws.close();
     }
   });
@@ -482,75 +515,6 @@ describe('WebSocket (state verification)', () => {
     }
   });
 
-  it('terminal:send-to-linked delivers to linked terminal', async () => {
-    const ws = await openWs();
-    try {
-      ws.send('terminal:create', { name: 'Sender' });
-      const sender = await ws.next(m => m.type === 'terminal:created');
-      ws.send('terminal:create', { name: 'Receiver' });
-      const receiver = await ws.next(m => m.type === 'terminal:created');
-
-      const from = sender.payload.id;
-      const to = receiver.payload.id;
-
-      ws.send('terminal:link', { from, to });
-      await ws.next(m => m.type === 'terminal:linked');
-
-      ws.send('terminal:send-to-linked', { from, to, text: 'hello linked' });
-      const msg = await ws.next(m => m.type === 'terminal:message-sent');
-      expect(msg.payload.from).toBe(from);
-      expect(msg.payload.to).toBe(to);
-      expect(msg.payload.text).toBe('hello linked');
-      expect(msg.payload).toHaveProperty('timestamp');
-      expect(msg.payload).toHaveProperty('workspaceId');
-
-      ws.send('terminal:list');
-      const listed = await ws.next(m => m.type === 'terminal:list');
-      const messageWorkspace = listed.payload.workspaces.find(w => w.id === msg.payload.workspaceId);
-      expect(messageWorkspace.messages.some(message =>
-        message.from === from && message.to === to && message.text === 'hello linked')).toBe(true);
-
-      // Cleanup
-      ws.send('terminal:destroy', { id: from });
-      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === from);
-      ws.send('terminal:destroy', { id: to });
-      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === to);
-    } finally {
-      ws.close();
-    }
-  });
-
-  it('terminal:send-to-linked does NOT deliver to unlinked terminal', async () => {
-    const ws = await openWs();
-    try {
-      ws.send('terminal:create', { name: 'NotLinked A' });
-      const a = await ws.next(m => m.type === 'terminal:created');
-      ws.send('terminal:create', { name: 'NotLinked B' });
-      const b = await ws.next(m => m.type === 'terminal:created');
-
-      const idA = a.payload.id;
-      const idB = b.payload.id;
-
-      // Send without linking — should NOT produce a message-sent event
-      ws.send('terminal:send-to-linked', { from: idA, to: idB, text: 'should fail' });
-
-      // Wait briefly — no message-sent should arrive
-      await new Promise(r => setTimeout(r, 500));
-
-      // Verify by requesting list (ensures server processed our message)
-      ws.send('terminal:list');
-      await ws.next(m => m.type === 'terminal:list');
-
-      // Cleanup
-      ws.send('terminal:destroy', { id: idA });
-      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idA);
-      ws.send('terminal:destroy', { id: idB });
-      await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idB);
-    } finally {
-      ws.close();
-    }
-  });
-
   it('unknown WebSocket message type returns error', async () => {
     const ws = await openWs();
     try {
@@ -593,29 +557,30 @@ describe('WebSocket (state verification)', () => {
     }
   });
 
-  it('terminal:list sends buffered output for restored terminals', async () => {
+  it('terminal:list does not auto-replay buffered output', async () => {
     const ws = await openWs();
     try {
-      // Create a terminal and send some input
       ws.send('terminal:create', { name: 'Buffer Test' });
       const created = await ws.next(m => m.type === 'terminal:created');
       const id = created.payload.id;
 
-      // Wait for shell prompt output
+      // Let the shell produce some prompt output into the server-side buffer.
       await new Promise(r => setTimeout(r, 1000));
 
-      // Open a second WebSocket — terminal:list should replay buffer
+      // A fresh connection gets the list but must NOT receive a historical
+      // byte dump — the client relies on tmux's attach redraw at the correct
+      // pane size to restore the visible screen.
       const ws2 = await openWs();
       try {
         ws2.send('terminal:list');
         await ws2.next(m => m.type === 'terminal:list');
 
-        // Should receive terminal:output with buffered data
-        const output = await ws2.next(
-          m => m.type === 'terminal:output' && m.payload.id === id,
-          3000
-        );
-        expect(output.payload.data.length).toBeGreaterThan(0);
+        let gotOutput = false;
+        try {
+          await ws2.next(m => m.type === 'terminal:output' && m.payload.id === id, 500);
+          gotOutput = true;
+        } catch (e) { /* expected: timeout */ }
+        expect(gotOutput).toBe(false);
       } finally {
         ws2.close();
       }
