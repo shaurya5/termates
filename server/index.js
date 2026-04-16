@@ -276,13 +276,13 @@ httpServer.listen(PORT, '127.0.0.1', () => {
   console.log(`  ➜  App:      http://localhost:${PORT}`);
   console.log(`  ➜  Socket:   ${SOCKET_PATH}`);
   console.log(`  ➜  State:    ~/.termates/state.json`);
-  console.log(`  ➜  Persist:  ${ptyManager.tmuxAvailable ? 'tmux (terminals survive restarts)' : 'none (install tmux for persistence)'}`);
+  console.log(`  ➜  Persist:  ${ptyManager.tmuxAvailable ? `${ptyManager.backend.name} (terminals survive restarts)` : 'none (install abduco or tmux for persistence)'}`);
   console.log('');
   console.log('  All data stays on this device. No telemetry.');
   console.log('');
 });
 
-// --- Shutdown: save state, detach PTYs, keep tmux alive ---
+// --- Shutdown: save state, detach PTYs, keep abduco/tmux sessions alive ---
 function shutdown() {
   stopTuiMonitor();
   doPersist();

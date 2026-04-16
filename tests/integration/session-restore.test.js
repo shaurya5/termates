@@ -3,9 +3,13 @@
  *
  * These tests verify the full persistence cycle:
  *   1. Start server (port 17681), create a terminal.
- *   2. Kill the server with SIGTERM — tmux session must survive.
+ *   2. Kill the server with SIGTERM — the backend session must survive.
  *   3. Restart the server on the same port — the terminal should be restored.
  *   4. Send a command to the restored terminal and verify output flows.
+ *
+ * Persistence backend is selected by the server: abduco > tmux > none.
+ * The tmux backend uses a private socket at ~/.termates/tmux.sock (not the
+ * default socket), so the helpers below mirror that.
  *
  * ⚠  The Unix socket path (os.tmpdir()/termates.sock) is hardcoded in the
  *    server; it cannot be overridden via env.  Do NOT run this file in parallel
@@ -15,7 +19,7 @@
  *    backed up before every test run and restored afterwards so that normal
  *    Termates usage is not affected.
  *
- * Tests that require tmux are skipped automatically when tmux is not found.
+ * Persistence tests are skipped when neither abduco nor tmux is available.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -34,13 +38,28 @@ const STATE_DIR = path.join(os.homedir(), '.termates');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 const TEST_PORT = 17681;
 
-// ─── tmux availability ────────────────────────────────────────────────────────
+// ─── Backend detection ────────────────────────────────────────────────────────
+// Mirrors server/persistence-backend.js: abduco > tmux > none. On Linux CI
+// abduco is not bundled, so tmux (installed via apt) is the active backend.
 
-let tmuxAvailable = false;
-try {
-  execSync('tmux -V', { stdio: 'pipe' });
-  tmuxAvailable = true;
-} catch { /* not available */ }
+const HOME_STATE_DIR = path.join(os.homedir(), '.termates');
+const PRIVATE_TMUX_SOCKET = path.join(HOME_STATE_DIR, 'tmux.sock');
+const ABDUCO_DIR = path.join(HOME_STATE_DIR, 'abduco');
+
+function hasBin(name) {
+  try { execSync(`command -v ${name}`, { stdio: 'pipe' }); return true; }
+  catch { return false; }
+}
+
+function bundledAbduco() {
+  const p = path.join(ROOT, 'binaries', `abduco-${process.platform}-${process.arch}`);
+  try { return fs.existsSync(p) && (fs.statSync(p).mode & 0o111) ? p : null; }
+  catch { return null; }
+}
+
+const abducoAvailable = !!bundledAbduco() || hasBin('abduco');
+const tmuxAvailable = hasBin('tmux');
+const persistenceAvailable = abducoAvailable || tmuxAvailable;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -143,21 +162,78 @@ function sendUnixCommand(command, timeoutMs = 10000) {
 }
 
 /**
- * Return true when the named tmux session exists.
+ * Return true when a backend session with the given name exists. Checks
+ * abduco (socket file under ~/.termates/abduco/) then tmux on the private
+ * socket the server uses (~/.termates/tmux.sock).
  */
-function tmuxSessionExists(sessionName) {
-  try {
-    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
-    return true;
-  } catch { return false; }
+function abducoSocketFound(sessionName, dir = ABDUCO_DIR) {
+  // abduco stores sockets at either `<dir>/<session>` (custom ABDUCO_SOCKET_DIR
+  // layouts) or `<dir>/<binary>/<user>/<session>@<host>` (its default nesting
+  // on macOS). Walk recursively and match either form.
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch { return false; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.name === sessionName || e.name.startsWith(`${sessionName}@`)) return true;
+    if (e.isDirectory() && abducoSocketFound(sessionName, full)) return true;
+  }
+  return false;
+}
+
+function backendSessionExists(sessionName) {
+  if (abducoSocketFound(sessionName)) return true;
+  if (tmuxAvailable) {
+    try {
+      execSync(
+        `tmux -S "${PRIVATE_TMUX_SOCKET}" has-session -t "${sessionName}" 2>/dev/null`,
+        { stdio: 'pipe' },
+      );
+      return true;
+    } catch { /* fallthrough */ }
+  }
+  return false;
 }
 
 /**
- * Kill a tmux session (best-effort, ignores errors).
+ * Kill a backend session by name (best-effort, ignores errors). Tries the
+ * abduco socket file first, then tmux on the private socket.
  */
-function tmuxKillSession(sessionName) {
-  try { execSync(`tmux kill-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' }); }
-  catch { /* already gone */ }
+function findAbducoSocketPath(sessionName, dir = ABDUCO_DIR) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch { return null; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.name === sessionName || e.name.startsWith(`${sessionName}@`)) return full;
+    if (e.isDirectory()) {
+      const nested = findAbducoSocketPath(sessionName, full);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function backendKillSession(sessionName) {
+  const abducoSock = findAbducoSocketPath(sessionName);
+  if (abducoSock) {
+    try {
+      const pids = execSync(`lsof -t -- "${abducoSock}" 2>/dev/null`, { encoding: 'utf-8' })
+        .trim().split('\n').filter(Boolean);
+      for (const pid of pids) {
+        try { process.kill(Number(pid), 'SIGTERM'); } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    try { fs.unlinkSync(abducoSock); } catch { /* ignore */ }
+  }
+  if (tmuxAvailable) {
+    try {
+      execSync(
+        `tmux -S "${PRIVATE_TMUX_SOCKET}" kill-session -t "${sessionName}" 2>/dev/null`,
+        { stdio: 'pipe' },
+      );
+    } catch { /* already gone */ }
+  }
 }
 
 // ─── State file backup / restore ──────────────────────────────────────────────
@@ -187,8 +263,8 @@ afterAll(() => {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe('Session persistence (requires tmux)', () => {
-  it.skipIf(!tmuxAvailable)('creates a tmux session when a terminal is created', async () => {
+describe('Session persistence (requires abduco or tmux)', () => {
+  it.skipIf(!persistenceAvailable)('creates a backend session when a terminal is created', async () => {
     // Clear any stale state so we start fresh.
     try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { /* ok */ }
 
@@ -204,14 +280,14 @@ describe('Session persistence (requires tmux)', () => {
       terminalId = created.id;
 
       const expectedSession = `termates-${terminalId}`;
-      expect(tmuxSessionExists(expectedSession)).toBe(true);
+      expect(backendSessionExists(expectedSession)).toBe(true);
     } finally {
-      if (terminalId) tmuxKillSession(`termates-${terminalId}`);
+      if (terminalId) backendKillSession(`termates-${terminalId}`);
       await stopServer(server);
     }
   }, 40000);
 
-  it.skipIf(!tmuxAvailable)('tmux session survives server SIGTERM', async () => {
+  it.skipIf(!persistenceAvailable)('backend session survives server SIGTERM', async () => {
     try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { /* ok */ }
 
     let server;
@@ -228,15 +304,15 @@ describe('Session persistence (requires tmux)', () => {
       await stopServer(server);
       server = null;
 
-      // The tmux session should still be alive
-      expect(tmuxSessionExists(`termates-${terminalId}`)).toBe(true);
+      // The backend session should still be alive
+      expect(backendSessionExists(`termates-${terminalId}`)).toBe(true);
     } finally {
-      if (terminalId) tmuxKillSession(`termates-${terminalId}`);
+      if (terminalId) backendKillSession(`termates-${terminalId}`);
       if (server) await stopServer(server);
     }
   }, 40000);
 
-  it.skipIf(!tmuxAvailable)('server restores terminal on restart', async () => {
+  it.skipIf(!persistenceAvailable)('server restores terminal on restart', async () => {
     try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { /* ok */ }
 
     let server1;
@@ -254,8 +330,8 @@ describe('Session persistence (requires tmux)', () => {
       await stopServer(server1);
       server1 = null;
 
-      // Verify the tmux session is still alive before we restart
-      expect(tmuxSessionExists(`termates-${terminalId}`)).toBe(true);
+      // Verify the backend session is still alive before we restart
+      expect(backendSessionExists(`termates-${terminalId}`)).toBe(true);
 
       // ── Phase 2: restart the server ────────────────────────────────────────
       server2 = await startServer();
@@ -267,13 +343,13 @@ describe('Session persistence (requires tmux)', () => {
       expect(restored).toBeDefined();
       expect(restored.name).toBe('RestoreTest');
     } finally {
-      if (terminalId) tmuxKillSession(`termates-${terminalId}`);
+      if (terminalId) backendKillSession(`termates-${terminalId}`);
       if (server1) await stopServer(server1);
       if (server2) await stopServer(server2);
     }
   }, 60000);
 
-  it.skipIf(!tmuxAvailable)('can send a command to a restored terminal and receive output', async () => {
+  it.skipIf(!persistenceAvailable)('can send a command to a restored terminal and receive output', async () => {
     try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { /* ok */ }
 
     let server1;
@@ -321,15 +397,15 @@ describe('Session persistence (requires tmux)', () => {
       // The buffer is raw terminal output; the echo output should be present.
       expect(readRes.buffer).toContain('termates_restore_ok');
     } finally {
-      if (terminalId) tmuxKillSession(`termates-${terminalId}`);
+      if (terminalId) backendKillSession(`termates-${terminalId}`);
       if (server1) await stopServer(server1);
       if (server2) await stopServer(server2);
     }
   }, 60000);
 });
 
-describe('Session persistence (no tmux fallback)', () => {
-  it.skipIf(tmuxAvailable)('creates a terminal without tmux (PTY-only mode)', async () => {
+describe('Session persistence (no backend fallback)', () => {
+  it.skipIf(persistenceAvailable)('creates a terminal without abduco/tmux (PTY-only mode)', async () => {
     try { if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE); } catch { /* ok */ }
 
     let server;

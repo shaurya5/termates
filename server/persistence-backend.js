@@ -84,31 +84,92 @@ class AbducoBackend {
   }
 
   // Env that makes abduco use our session directory instead of ~/.abduco.
+  // Abduco still nests further under <binary-basename>/<user>/ inside this
+  // directory, which is why we locate sockets recursively below.
   _env(base) {
     return { ...base, ABDUCO_SOCKET_DIR: ABDUCO_DIR };
   }
 
+  // Locate the Unix-domain socket abduco created for `sessionName`. Returns
+  // null if not found. Abduco's on-disk layout is:
+  //   $ABDUCO_SOCKET_DIR/<binary-basename>/<user>/<session>@<hostname>
+  // so a plain existsSync on ABDUCO_DIR/sessionName misses it. We walk the
+  // tree and match either the bare name or `<name>@...` suffix form.
+  _findSocket(sessionName, dir = ABDUCO_DIR) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch (e) { return null; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.name === sessionName || e.name.startsWith(`${sessionName}@`)) return full;
+      if (e.isDirectory()) {
+        const nested = this._findSocket(sessionName, full);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+
+  _listSockets(dir = ABDUCO_DIR, acc = []) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch (e) { return acc; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) this._listSockets(full, acc);
+      else acc.push(e.name.replace(/@[^@]+$/, ''));
+    }
+    return acc;
+  }
+
   sessionExists(sessionName) {
-    try { return fs.existsSync(path.join(ABDUCO_DIR, sessionName)); }
-    catch (e) { return false; }
+    // Fast-path the canonical socket location (and preserve the contract
+    // that callers mocking existsSync can rely on). Fall back to the
+    // recursive walk for abduco's default nested layout.
+    if (fs.existsSync(path.join(ABDUCO_DIR, sessionName))) return true;
+    return this._findSocket(sessionName) !== null;
   }
 
   listSessions() {
-    try {
-      return fs.readdirSync(ABDUCO_DIR).filter((n) => !n.startsWith('.'));
-    } catch (e) { return []; }
+    return this._listSockets();
   }
 
   // Return [spawnFile, spawnArgs, env] that node-pty should use to start a
-  // PTY for this session. Uses -A so the command creates the session on
-  // first call and just attaches thereafter. -e sets the detach escape to
-  // NUL (^@) which cannot be typed, so users can't accidentally detach.
-  buildSpawn({ sessionName, innerCmd, innerArgs = [], baseEnv }) {
-    const args = ['-A', '-e', '^@', sessionName, innerCmd, ...innerArgs];
+  // PTY attached to this session.
+  //
+  // Two-step create pattern (mirrors the tmux backend): we create the
+  // session detached (`-n`) with a synchronous execFileSync, so the abduco
+  // master daemonizes into its own process group *before* node-pty spawns
+  // the attaching client. If the client is later killed (server shutdown,
+  // reload), only the attacher dies — the master keeps the session alive
+  // for a future attach.
+  //
+  // The old `-A` (attach-or-create) flow created master and client in the
+  // same pty fork tree; on macOS the master died alongside the client when
+  // node-pty sent SIGHUP, which defeated the whole point of the backend.
+  //
+  // `-e ^@` sets the detach escape to NUL (un-typeable), so users can't
+  // accidentally disconnect from the session.
+  buildSpawn({ sessionName, innerCmd, innerArgs = [], baseEnv, cwd }) {
+    const env = this._env(baseEnv);
+    if (!this.sessionExists(sessionName)) {
+      try {
+        // stdio MUST be 'ignore' — the abduco master daemon inherits
+        // stdio fds from its parent, so with a pipe execFileSync hangs
+        // until the daemon exits (never). 'ignore' closes fds in the
+        // child so the sync call returns as soon as the outer fork
+        // completes, which is all we need.
+        execFileSync(this.binary, ['-n', sessionName, innerCmd, ...innerArgs], {
+          env,
+          cwd: cwd || undefined,
+          stdio: 'ignore',
+        });
+      } catch (e) { /* fall through — -a will error loudly if truly broken */ }
+    }
     return {
       spawnFile: this.binary,
-      spawnArgs: args,
-      env: this._env(baseEnv),
+      spawnArgs: ['-a', '-e', '^@', sessionName],
+      env,
     };
   }
 
@@ -116,16 +177,15 @@ class AbducoBackend {
   // identify it by opening the socket with lsof — abduco's master holds the
   // socket open. On macOS + Linux, `lsof -t` returns PIDs, one per line.
   killSession(sessionName) {
-    const sockPath = path.join(ABDUCO_DIR, sessionName);
-    if (!fs.existsSync(sockPath)) return;
+    const sockPath = this._findSocket(sessionName);
+    if (!sockPath) return;
     try {
-      const pids = execSync(`lsof -t -- ${sockPath} 2>/dev/null`, { encoding: 'utf-8' })
+      const pids = execSync(`lsof -t -- "${sockPath}" 2>/dev/null`, { encoding: 'utf-8' })
         .trim().split('\n').filter(Boolean);
       for (const pid of pids) {
         try { process.kill(Number(pid), 'SIGTERM'); } catch (e) {}
       }
     } catch (e) { /* best-effort */ }
-    // Socket file may linger; remove it so listSessions stays accurate.
     try { fs.unlinkSync(sockPath); } catch (e) {}
   }
 }

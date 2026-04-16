@@ -118,7 +118,7 @@ export class PtyManager {
       const innerArgs = sshTarget ? [sshTarget] : [];
       ({ spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
         sessionName, innerCmd, innerArgs,
-        baseEnv: env, cols: termCols, rows: termRows,
+        baseEnv: env, cols: termCols, rows: termRows, cwd: workDir,
       }));
     } else {
       spawnFile = shell || process.env.SHELL || '/bin/zsh';
@@ -151,13 +151,12 @@ export class PtyManager {
       role,
     });
 
-    // With abduco, -A attaches to the existing session and ignores the inner
-    // command. With tmux, buildSpawn skips create and just builds the attach
-    // command. Either way we don't start a new shell here.
+    // Session is already known to exist (checked above), so buildSpawn skips
+    // its create step and returns the attach command only — no new shell.
     const shell = process.env.SHELL || '/bin/zsh';
     const { spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
       sessionName, innerCmd: shell, innerArgs: [],
-      baseEnv: env, cols: cols || 80, rows: rows || 24,
+      baseEnv: env, cols: cols || 80, rows: rows || 24, cwd: process.env.HOME,
     });
 
     const ptyProcess = pty.spawn(spawnFile, spawnArgs, {
