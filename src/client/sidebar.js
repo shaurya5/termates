@@ -89,31 +89,6 @@ export function updateSidebar() {
   }
   if (!links.length) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No linked terminals'; ll.appendChild(e); }
 
-  // Message list
-  const ml = document.getElementById('message-list');
-  ml.innerHTML = '';
-  const messages = ws?.messages || [];
-  const recentMessages = messages.slice(-8).reverse();
-  for (const message of recentMessages) {
-    const fromName = S.terminals.get(message.from)?.name || message.from;
-    const toName = S.terminals.get(message.to)?.name || message.to;
-    const li = document.createElement('li');
-    li.className = 'message-list-item';
-
-    const meta = document.createElement('div');
-    meta.className = 'message-meta';
-    meta.textContent = `${fromName} -> ${toName} · ${formatMessageTime(message.timestamp)}`;
-
-    const body = document.createElement('div');
-    body.className = 'message-body';
-    body.textContent = (message.text || '').trimEnd();
-
-    li.appendChild(meta);
-    li.appendChild(body);
-    ml.appendChild(li);
-  }
-  if (!recentMessages.length) { const e = document.createElement('li'); e.className = 'empty-state'; e.textContent = 'No messages yet'; ml.appendChild(e); }
-
   // Workspace info panel
   const info = document.getElementById('ws-info');
   info.innerHTML = '';
@@ -130,13 +105,5 @@ export function updateSidebar() {
     if (isRemote && ws.remoteCwd) addRow('Dir', ws.remoteCwd);
     if (!isRemote && ws.cwd) addRow('Dir', ws.cwd);
     addRow('Terminals', String(ws.terminalIds.length));
-  }
-}
-
-function formatMessageTime(timestamp) {
-  try {
-    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch (e) {
-    return '';
   }
 }

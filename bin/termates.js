@@ -172,62 +172,6 @@ program
   });
 
 program
-  .command('ask <from> <to> <text...>')
-  .description('Send a message from one terminal to a linked terminal')
-  .action(async (from, to, textParts) => {
-    try {
-      const result = await sendCommand({ command: 'ask', from, to, text: textParts.join(' ') });
-      if (result.ok) console.log('Message sent.');
-      else { console.error('Error:', result.error); process.exit(1); }
-    } catch (err) { console.error(err.message); process.exit(1); }
-  });
-
-program
-  .command('broadcast <text...>')
-  .description('Send a message from one terminal to all of its linked terminals')
-  .option('-f, --from <terminal>', 'Source terminal ID or name (defaults to TERMATES_TERMINAL_ID)')
-  .action(async (textParts, options) => {
-    const from = options.from || process.env.TERMATES_TERMINAL_ID;
-    if (!from) {
-      console.error('Error: source terminal required. Use --from or run inside a Termates-managed terminal.');
-      process.exit(1);
-    }
-    try {
-      const result = await sendCommand({ command: 'broadcast', from, text: textParts.join(' ') });
-      if (result.ok) console.log(`Sent to ${result.count} linked terminal(s).`);
-      else { console.error('Error:', result.error); process.exit(1); }
-    } catch (err) { console.error(err.message); process.exit(1); }
-  });
-
-program
-  .command('inbox [target]')
-  .description('Show recent messages for a terminal')
-  .option('-l, --limit <n>', 'Number of messages', '20')
-  .action(async (target, options) => {
-    const resolvedTarget = target || process.env.TERMATES_TERMINAL_ID;
-    if (!resolvedTarget) {
-      console.error('Error: target terminal required. Pass a terminal or run inside a Termates-managed terminal.');
-      process.exit(1);
-    }
-    try {
-      const result = await sendCommand({
-        command: 'inbox',
-        target: resolvedTarget,
-        limit: parseInt(options.limit, 10),
-      });
-      if (!result.ok) { console.error('Error:', result.error); process.exit(1); }
-      if (!result.messages.length) {
-        console.log('No messages.');
-        return;
-      }
-      for (const message of result.messages) {
-        const when = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        console.log(`[${when}] ${message.fromName || message.from} -> ${message.toName || message.to}: ${message.text}`);
-      }
-    } catch (err) { console.error(err.message); process.exit(1); }
-  });
-
-program
   .command('notify <target>')
   .description('Send a notification for a terminal')
   .option('-s, --status <status>', 'Status: idle, attention, success, warning, error', 'attention')

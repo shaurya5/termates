@@ -2,15 +2,16 @@
 // Server Event Handlers
 // ============================================
 
-import { S, activeWs, persistWorkspaces } from './state.js';
+import { S, activeWs, persistWorkspaces, normalizeAgentPresets } from './state.js';
 import { createXterm } from './terminal-factory.js';
 import { send } from './transport.js';
 import { updateSidebar } from './sidebar.js';
-import { renderLayout, fitAll, addTerminalToLayout, updatePanelStatus, updateLinked } from './layout/renderer.js';
+import { renderLayout, fitAll, addTerminalToLayout, updatePanelStatus, updateLinked, forgetContainer } from './layout/renderer.js';
 import { setActive } from './link-mode.js';
 import { toggleBrowser, renderBrowserTabs } from './browser-panel.js';
 import { showNotif } from './notifications.js';
 import { reconcileWorkspacesWithTerminals, removeTerminalFromWorkspaceState } from './workspace-state.js';
+import { refreshAgentPresetButtons } from './dialogs.js';
 
 export function handleMsg(msg) {
   switch (msg.type) {
@@ -22,16 +23,18 @@ export function handleMsg(msg) {
     case 'terminal:linked': onLinked(msg.payload); break;
     case 'terminal:unlinked': onUnlinked(msg.payload); break;
     case 'terminal:status-changed': onStatusChanged(msg.payload); break;
+    case 'terminal:tui-state': onTuiState(msg.payload); break;
     case 'terminal:notification': onNotif(msg.payload); break;
-    case 'terminal:message-sent': onMessageSent(msg.payload); break;
+    case 'settings:updated': onSettingsUpdated(msg.payload); break;
     case 'terminal:list': onList(msg.payload); break;
   }
 }
 
-export function onCreated({ id, name, role, status }) {
+export function onCreated({ id, name, role, status, inTui }) {
   if (S.terminals.has(id)) return;
   const { xterm, fitAddon } = createXterm(id);
-  S.terminals.set(id, { id, name, role, status: status || 'idle', xterm, fitAddon });
+  const terminal = { id, name, role, status: status || 'idle', inTui: !!inTui, xterm, fitAddon };
+  S.terminals.set(id, terminal);
   // Add to active workspace
   const ws = activeWs();
   if (ws && !ws.terminalIds.includes(id)) {
@@ -41,16 +44,32 @@ export function onCreated({ id, name, role, status }) {
   }
   updateSidebar();
   setActive(id);
+  refreshAgentPresetButtons();
 }
 
-export function onOutput({ id, data }) { S.terminals.get(id)?.xterm.write(data); }
+export function onOutput({ id, data }) {
+  const terminal = S.terminals.get(id);
+  if (!terminal) return;
+  // Gate on `_opened` (set by mountWhenSized only AFTER it has finished fit +
+  // restore + queue-flush), NOT on xterm.element. Checking .element would let
+  // live bytes jump ahead of still-queued writes during the brief window
+  // between xterm.open() and the queue flush — the writes would then hit
+  // xterm in the wrong order and the cursor would drift.
+  if (!terminal._opened) {
+    (terminal._pendingWrites ||= []).push(data);
+    return;
+  }
+  terminal.xterm.write(data);
+}
 
 export function destroyTerminalLocally(id) {
   const t = S.terminals.get(id);
   if (t) {
+    try { t._resizeObserver?.disconnect(); } catch (e) {}
     try { t.xterm.dispose(); } catch (e) { /* WebGL context may already be lost */ }
     S.terminals.delete(id);
   }
+  forgetContainer(id);
   S.workspaces = removeTerminalFromWorkspaceState(S.workspaces, id);
   persistWorkspaces();
   renderLayout();
@@ -67,12 +86,29 @@ export function onDestroyed({ id }) {
 
 export function onConfigured({ id, name, role }) {
   const t = S.terminals.get(id);
-  if (t) {
-    if (name !== undefined) t.name = name;
-    if (role !== undefined) t.role = role;
-    updateSidebar();
-    renderLayout();
+  if (!t) return;
+  if (name !== undefined) t.name = name;
+  if (role !== undefined) t.role = role;
+  // Surgical DOM update — rebuilding the whole layout on a rename was tearing
+  // down every xterm in every pane, which is what produced the global flicker.
+  const panel = document.querySelector(`[data-tid="${id}"]`);
+  if (panel) {
+    const nm = panel.querySelector('.panel-name');
+    if (nm && name !== undefined) nm.textContent = t.name;
+    if (role !== undefined) {
+      const oldBadge = panel.querySelector('.panel-role');
+      if (oldBadge) oldBadge.remove();
+      if (t.role) {
+        const hdr = panel.querySelector('.panel-header');
+        const launchers = panel.querySelector('.panel-launchers');
+        const badge = document.createElement('span');
+        badge.className = `panel-role terminal-role-badge ${t.role}`;
+        badge.textContent = t.role;
+        if (hdr && launchers) hdr.insertBefore(badge, launchers);
+      }
+    }
   }
+  updateSidebar();
 }
 
 export function onLinked({ from, to }) {
@@ -98,43 +134,28 @@ export function onStatusChanged({ id, status }) {
   if (t) { t.status = status; updateSidebar(); updatePanelStatus(id); }
 }
 
+export function onTuiState({ id, inTui }) {
+  const t = S.terminals.get(id);
+  if (!t) return;
+  t.inTui = !!inTui;
+  refreshAgentPresetButtons();
+}
+
 export function onNotif({ id, status, text }) {
   const t = S.terminals.get(id);
   if (t) { t.status = status; updateSidebar(); updatePanelStatus(id); showNotif(`${t.name}: ${text || status}`, status); }
 }
 
-export function onMessageSent(payload) {
-  const targetWorkspace = payload.workspaceId
-    ? S.workspaces.find((workspace) => workspace.id === payload.workspaceId)
-    : S.workspaces.find((workspace) =>
-      (workspace.terminalIds || []).includes(payload.from) && (workspace.terminalIds || []).includes(payload.to));
-  if (!targetWorkspace) return;
-
-  targetWorkspace.messages = targetWorkspace.messages || [];
-  if (!targetWorkspace.messages.some((message) => message.id && message.id === payload.id)) {
-    targetWorkspace.messages.push({
-      id: payload.id || `${payload.timestamp}-${payload.from}-${payload.to}`,
-      from: payload.from,
-      to: payload.to,
-      text: payload.text,
-      timestamp: payload.timestamp,
-    });
-    if (targetWorkspace.messages.length > 200) {
-      targetWorkspace.messages = targetWorkspace.messages.slice(-200);
-    }
-  }
-
-  updateSidebar();
-  const fromName = S.terminals.get(payload.from)?.name || payload.from;
-  const toName = S.terminals.get(payload.to)?.name || payload.to;
-  const preview = String(payload.text || '').replace(/\s+/g, ' ').trim();
-  showNotif(`${fromName} -> ${toName}: ${preview}`, 'attention');
+export function onSettingsUpdated({ agentPresets }) {
+  S.agentPresets = normalizeAgentPresets(agentPresets);
+  refreshAgentPresetButtons();
 }
 
-export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, browserTabs, activeBrowserTab, browserOpen, browserWidth }) {
+export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, browserTabs, activeBrowserTab, browserOpen, browserWidth, agentPresets }) {
   if (browserTabs?.length) { S.browserTabs = browserTabs; S.activeBrowserTab = activeBrowserTab || 0; }
   if (browserOpen) S.browserOpen = true;
   if (browserWidth) S.browserWidth = browserWidth;
+  S.agentPresets = normalizeAgentPresets(agentPresets);
 
   // Restore workspaces
   if (workspaces?.length) {
@@ -150,7 +171,13 @@ export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspace
   if (terminals?.length && S.terminals.size === 0) {
     for (const t of terminals) {
       const { xterm, fitAddon } = createXterm(t.id);
-      S.terminals.set(t.id, { id: t.id, name: t.name, role: t.role, status: t.status || 'idle', xterm, fitAddon });
+      const terminal = {
+        id: t.id, name: t.name, role: t.role,
+        status: t.status || 'idle',
+        inTui: !!t.inTui,
+        xterm, fitAddon,
+      };
+      S.terminals.set(t.id, terminal);
     }
   }
 
@@ -158,11 +185,12 @@ export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspace
 
   renderLayout();
   updateSidebar();
+  refreshAgentPresetButtons();
   const ws = activeWs();
   if (ws?.terminalIds.length) setActive(ws.terminalIds[0]);
   if (S.browserOpen) toggleBrowser(true);
   renderBrowserTabs();
 
-  // Fit all terminals after layout is rendered — buffer content already sent by server
-  setTimeout(() => fitAll(), 500);
+  // renderLayout's rAF opens + fits + resizes + flushes pending writes per terminal.
+  // No arbitrary timer — the old 500ms delay was masking a mount/resize race.
 }

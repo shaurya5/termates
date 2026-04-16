@@ -2,6 +2,36 @@ import { removeLayoutLeaf } from '../shared/layout-tree.js';
 
 const MAX_WORKSPACE_MESSAGES = 200;
 
+// Central TUI monitor: polls every terminal's tmux pane alt-screen state.
+// When a pane enters/leaves alt-screen (claude, codex, vim, less, htop…) we
+// broadcast so the client can disable the agent-launch buttons on that pane.
+// Detection works regardless of how the TUI started — typed manually, launched
+// via button, or restored from a persisted tmux session.
+const TUI_POLL_MS = 1500;
+let tuiMonitorHandle = null;
+
+export function startTuiMonitor(ptyManager, broadcast) {
+  if (tuiMonitorHandle) return;
+  if (process.env.TERMATES_DISABLE_TUI_MONITOR === '1') return;
+  tuiMonitorHandle = setInterval(async () => {
+    for (const t of ptyManager.list()) {
+      const onAlt = await ptyManager.paneAlternateOn(t.id);
+      if (onAlt === null) continue; // tmux unavailable or pane gone
+      const res = ptyManager.setInTui(t.id, onAlt);
+      if (res?.changed) {
+        broadcast({ type: 'terminal:tui-state', payload: { id: t.id, inTui: res.current } });
+      }
+    }
+  }, TUI_POLL_MS);
+}
+
+export function stopTuiMonitor() {
+  if (tuiMonitorHandle) {
+    clearInterval(tuiMonitorHandle);
+    tuiMonitorHandle = null;
+  }
+}
+
 /**
  * Save current terminal state to the state manager.
  */

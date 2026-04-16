@@ -4,6 +4,26 @@
 
 import { send } from './transport.js';
 
+export const DEFAULT_AGENT_PRESETS = Object.freeze({
+  claude: { command: 'claude' },
+  codex: { command: 'codex' },
+});
+
+export function normalizeAgentPresets(raw = {}) {
+  return {
+    claude: {
+      command: typeof raw?.claude?.command === 'string'
+        ? raw.claude.command
+        : DEFAULT_AGENT_PRESETS.claude.command,
+    },
+    codex: {
+      command: typeof raw?.codex?.command === 'string'
+        ? raw.codex.command
+        : DEFAULT_AGENT_PRESETS.codex.command,
+    },
+  };
+}
+
 export const S = {
   ws: null,
   connected: false,
@@ -11,6 +31,7 @@ export const S = {
   activeTerminalId: null,
   linkMode: false,
   linkSource: null,
+  agentPresets: normalizeAgentPresets(),
   // Workspaces
   workspaces: [],             // [{ id, name, terminalIds, links, layout }]
   activeWorkspaceId: null,
@@ -33,5 +54,11 @@ export function persistWorkspaces() {
     workspaces: S.workspaces,
     activeWorkspaceId: S.activeWorkspaceId,
     nextWorkspaceId: S.nextWorkspaceId,
+  });
+}
+
+export function persistAgentPresets() {
+  send('settings:update', {
+    agentPresets: S.agentPresets,
   });
 }

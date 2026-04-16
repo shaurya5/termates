@@ -22,6 +22,7 @@ export class StateManager {
       nextWorkspaceId: 2,
       terminals: [],
       nextTerminalId: 1,
+      agentPresets: this._normalizeAgentPresets(),
       browserTabs: [],
       activeBrowserTab: 0,
       browserOpen: false,
@@ -41,7 +42,17 @@ export class StateManager {
       cwd: workspace.cwd || null,
       sshTarget: workspace.sshTarget || null,
       remoteCwd: workspace.remoteCwd || null,
-      messages: workspace.messages || [],
+    };
+  }
+
+  _normalizeAgentPresets(presets = {}) {
+    return {
+      claude: {
+        command: typeof presets?.claude?.command === 'string' ? presets.claude.command : 'claude',
+      },
+      codex: {
+        command: typeof presets?.codex?.command === 'string' ? presets.codex.command : 'codex',
+      },
     };
   }
 
@@ -75,6 +86,7 @@ export class StateManager {
         } else {
           const nextState = { ...this._default(), ...data };
           nextState.workspaces = (data.workspaces || nextState.workspaces).map(ws => this._normalizeWorkspace(ws));
+          nextState.agentPresets = this._normalizeAgentPresets(data.agentPresets);
           this.state = nextState;
         }
         return true;
@@ -119,7 +131,15 @@ export class StateManager {
   setNextTerminalId(id) { this.state.nextTerminalId = id; this.save(); }
 
   // --- Workspaces ---
-  setWorkspaces(workspaces) { this.state.workspaces = workspaces; this.save(); }
+  setWorkspaces(workspaces) {
+    this.state.workspaces = workspaces.map((workspace) => this._normalizeWorkspace(workspace));
+    this.save();
+  }
+  setAgentPresets(presets) {
+    this.state.agentPresets = this._normalizeAgentPresets(presets);
+    this.save();
+    return this.state.agentPresets;
+  }
   setActiveWorkspaceId(id) { this.state.activeWorkspaceId = id; this.save(); }
   setNextWorkspaceId(id) { this.state.nextWorkspaceId = id; this.save(); }
 
@@ -128,8 +148,14 @@ export class StateManager {
   }
 
   updateWorkspace(id, updates) {
-    const ws = this.state.workspaces.find(w => w.id === id);
-    if (ws) { Object.assign(ws, updates); this.save(); }
+    const index = this.state.workspaces.findIndex(w => w.id === id);
+    if (index >= 0) {
+      this.state.workspaces[index] = this._normalizeWorkspace({
+        ...this.state.workspaces[index],
+        ...updates,
+      });
+      this.save();
+    }
   }
 
   // --- Browser ---

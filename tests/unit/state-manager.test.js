@@ -69,6 +69,7 @@ describe('StateManager', () => {
             } else {
               const nextState = { ...this._default(), ...data };
               nextState.workspaces = (data.workspaces || nextState.workspaces).map(ws => this._normalizeWorkspace(ws));
+              nextState.agentPresets = this._normalizeAgentPresets(data.agentPresets);
               this.state = nextState;
             }
             return true;
@@ -111,6 +112,14 @@ describe('StateManager', () => {
     it('activeWorkspaceId defaults to w1', () => {
       const sm = new StateManager();
       expect(sm.get().activeWorkspaceId).toBe('w1');
+    });
+
+    it('default agent presets include Claude and Codex launch commands', () => {
+      const sm = new StateManager();
+      expect(sm.get().agentPresets).toEqual({
+        claude: { command: 'claude' },
+        codex: { command: 'codex' },
+      });
     });
   });
 
@@ -160,18 +169,20 @@ describe('StateManager', () => {
       expect(sm2.get().workspaces[0].links[0].from).toBe('t1');
     });
 
-    it('preserves workspace messages after saveNow() and fresh load()', () => {
+    it('preserves agent presets after saveNow() and fresh load()', () => {
       const sm = new StateManager();
-      const ws = sm.get().workspaces[0];
-      ws.messages = [{ id: 'm1', from: 't1', to: 't2', text: 'hello', timestamp: 123 }];
-      sm.setWorkspaces(sm.get().workspaces);
+      sm.setAgentPresets({
+        claude: { command: 'claude --dangerously-skip-permissions' },
+        codex: { command: 'codex --model gpt-5-codex' },
+      });
       sm.saveNow();
 
       const sm2 = new StateManager();
       sm2.load();
-      expect(sm2.get().workspaces[0].messages).toEqual([
-        { id: 'm1', from: 't1', to: 't2', text: 'hello', timestamp: 123 },
-      ]);
+      expect(sm2.get().agentPresets).toEqual({
+        claude: { command: 'claude --dangerously-skip-permissions' },
+        codex: { command: 'codex --model gpt-5-codex' },
+      });
     });
 
     it('load() returns true when a state file exists', () => {
@@ -270,8 +281,29 @@ describe('StateManager', () => {
       const sm = new StateManager();
       sm.load();
       expect(sm.get().workspaces[0].cwd).toBeNull();
-      expect(sm.get().workspaces[0].messages).toEqual([]);
       expect(sm.get().workspaces[0].links).toEqual([]);
+      expect(sm.get().agentPresets).toEqual({
+        claude: { command: 'claude' },
+        codex: { command: 'codex' },
+      });
+    });
+
+    it('drops legacy workspace message history when loading saved state', () => {
+      fs.writeFileSync(path.join(tmpDir, 'state.json'), JSON.stringify({
+        version: 2,
+        workspaces: [{
+          id: 'w1',
+          name: 'Main',
+          terminalIds: ['t1'],
+          links: [],
+          messages: [{ id: 'm1', from: 't1', to: 't2', text: 'hello', timestamp: 123 }],
+        }],
+        activeWorkspaceId: 'w1',
+      }));
+
+      const sm = new StateManager();
+      sm.load();
+      expect(sm.get().workspaces[0]).not.toHaveProperty('messages');
     });
   });
 
@@ -293,12 +325,13 @@ describe('StateManager', () => {
 
     it('setWorkspaces() values survive saveNow() + load()', () => {
       const sm = new StateManager();
-      sm.setWorkspaces([{ id: 'w99', name: 'Special', terminalIds: [], links: [], layout: null }]);
+      sm.setWorkspaces([{ id: 'w99', name: 'Special', terminalIds: [], links: [], layout: null, messages: [{ id: 'm1' }] }]);
       sm.saveNow();
 
       const sm2 = new StateManager();
       sm2.load();
       expect(sm2.get().workspaces[0].id).toBe('w99');
+      expect(sm2.get().workspaces[0]).not.toHaveProperty('messages');
     });
 
     it('setTerminals() strips unknown fields (only stores id, name, role, status, tmuxSession)', () => {
@@ -375,6 +408,12 @@ describe('StateManager', () => {
       const sm = new StateManager();
       sm.updateWorkspace('w1', { name: 'Renamed' });
       expect(sm.get().workspaces[0].name).toBe('Renamed');
+    });
+
+    it('updateWorkspace re-normalizes legacy fields away', () => {
+      const sm = new StateManager();
+      sm.updateWorkspace('w1', { messages: [{ id: 'm1' }] });
+      expect(sm.get().workspaces[0]).not.toHaveProperty('messages');
     });
   });
 });

@@ -1,87 +1,57 @@
 # Termates Roadmap
 
-## Next Up: Agent-to-Agent Communication
+## Next Up: Multi-Agent Workspace Orchestration
 
 ### Problem
-Multiple AI agents (Claude Code, Codex, Aider, etc.) running in linked terminals need to collaborate - delegate tasks, share context, and coordinate like a team.
 
-### Design Decision
-- **Mixed-agent support** (not tied to any specific agent)
-- **Async communication** (fire-and-forget, not blocking)
-- **Typically 2-5 agents** per team
-- **Human-triggered for MVP**, autonomous later
-- **Hybrid approach**: shared files as data layer + PTY injection for notifications
+Users want to run several coding agents side by side, usually 2-5 at a time:
 
-### Architecture: Message Bus with PTY Notification
+- a lead or planner
+- one or more coding agents
+- a reviewer
+- a tester
+- sometimes a researcher or ops terminal
 
-```
-Human sends message via UI
-        |
-        v
-+-------------------+     message file written to
-|  Coder terminal   |---> ~/.termates/messages/
-|  (Claude Code)    |           |
-+-------------------+           v
-                      +--------------------+
-                      |  Termates Server   |  routes message
-                      |  (message bus)     |  based on links
-                      +--------------------+
-                                |
-                      PTY injection + file
-                                |
-                                v
-                      +--------------------+
-                      | Reviewer terminal  |  sees message as
-                      | (Codex / Claude)   |  natural language input
-                      +--------------------+
-                                |
-                      agent uses `termates reply`
-                                |
-                                v
-                      notification back to Coder
-```
+The hard part is not opening terminals. The hard part is making those terminals repeatable, visible, and easy to manage across local repos and remote hosts.
 
-### Step-by-Step Flow
-1. Human uses UI to compose and send a message to a target terminal
-2. Server saves message to `~/.termates/messages/` as JSON
-3. Server injects formatted notification into target terminal's PTY
-4. The agent (any TUI) sees this as text input and processes it
-5. Agent can use `termates reply <name> "response"` to send back
-6. Server routes reply, injects into source terminal
-7. Frontend shows message badges on terminals with unread messages
+### Product Direction
 
-### Injection Format (into target PTY)
-```
-=== TERMATES: Message from "Coder" ===
-Review auth.js changes
-=== Reply with: termates reply Coder "your response" ===
+- provider-agnostic: Claude Code, Codex, Aider, and similar tools should all fit
+- desktop-first: local Electron app with local state and no cloud dependency
+- human-controlled first: explicit launch and coordination before automation
+- artifact-driven coordination: files, git state, browser snapshots, and terminal status matter more than chat logs
+- workspace-first: the setup should be reproducible at the workspace level, not terminal by terminal
+
+### MVP Direction
+
+1. Workspace templates for common agent teams.
+2. Per-terminal launch profiles with shell, cwd, env, and startup commands.
+3. Git worktree-per-agent setup for coding/review/test terminals.
+4. Agent status and attention surfaces in the sidebar.
+5. Browser snapshot handoff into a terminal or workspace scratch file.
+
+### High-Level Architecture
+
+```text
+Workspace preset
+  -> launch planner
+  -> terminal creation + metadata
+  -> PTY/tmux persistence layer
+  -> workspace state + layout restore
+  -> agent status and attention UI
 ```
 
-### CLI Commands (for agents, not humans)
-```bash
-termates msg <target> "message"        # Send to a specific terminal
-termates reply <target> "response"     # Reply
-termates inbox                         # Check messages (uses TERMATES_TERMINAL_ID env var)
-termates broadcast "message"           # Send to all linked terminals
-```
+### Phase 2
 
-### UI Components
-- Message composer dialog (replaces current "Send to Linked")
-- Message badge/count on terminal items in sidebar
-- Message log panel (conversation view between linked terminals)
-- CLAUDE.md template generator for agent setup
+- reusable runbooks and prompt snippets by role
+- shared team memory directory for repo instructions and handoff files
+- checkpoint/summarize actions for long-running agent terminals
+- remote workspace presets with bootstrap commands
+- provider/model labeling per terminal
 
-### Phase 2: Autonomous Agent Communication
-- Agents decide when to communicate without human trigger
-- CLAUDE.md instructions teach agents about `termates msg/reply`
-- Shared context directory for persistent team memory
-- Agent presence detection (idle vs busy)
+### Future Ideas
 
----
-
-## Future Ideas
-- Session recording and playback
-- Terminal snapshots (save/restore terminal state)
-- Plugin system for custom agent integrations
-- Mobile remote control (view terminals from phone)
-- Collaborative mode (multiple humans viewing same workspace)
+- session recording and replay
+- plugin system for custom agent integrations
+- lightweight automation hooks for recurring local workflows
+- collaborative read-only workspace sharing

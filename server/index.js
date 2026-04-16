@@ -13,7 +13,7 @@ import { parseSSHConfig } from './ssh-config.js';
 import {
   persistState, addTerminalToWorkspace, addLinkToWorkspace, removeLinkFromWorkspaces, removeTerminalFromWorkspaces,
   subscribeTerminalOutput, cleanupDeadTerminal, restoreSession,
-  recordWorkspaceMessage, getMessagesForTerminal,
+  startTuiMonitor, stopTuiMonitor,
 } from './orchestration.js';
 import { setupWebSocket } from './ws-handler.js';
 import { setupCliSocket } from './cli-handler.js';
@@ -76,8 +76,6 @@ const ctx = {
   removeLinkFromWorkspaces: (from, to) => removeLinkFromWorkspaces(stateManager, from, to),
   removeTerminalFromWorkspaces: doRemoveFromWorkspaces,
   subscribeTerminalOutput: doSubscribe,
-  recordWorkspaceMessage: (from, to, text) => recordWorkspaceMessage(stateManager, from, to, text),
-  getMessagesForTerminal: (terminalId, limit) => getMessagesForTerminal(stateManager, terminalId, limit),
 };
 
 // --- WebSocket Server ---
@@ -248,6 +246,10 @@ const unixServer = setupCliSocket(SOCKET_PATH, ctx);
 // --- Restore session and start ---
 restoreSession(stateManager, ptyManager, linkManager, doSubscribe);
 
+// Poll each pane's tmux alt-screen state so clients can disable agent-launch
+// buttons whenever a full-screen TUI is running in that pane.
+startTuiMonitor(ptyManager, broadcast);
+
 httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n  Port ${PORT} is already in use. Another instance may be running.`);
@@ -282,6 +284,7 @@ httpServer.listen(PORT, '127.0.0.1', () => {
 
 // --- Shutdown: save state, detach PTYs, keep tmux alive ---
 function shutdown() {
+  stopTuiMonitor();
   doPersist();
   stateManager.saveNow();
   try { if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH); } catch (e) { /* ignore */ }

@@ -30,7 +30,6 @@ export function createWorkspace(name, type, cwd, sshTarget, remoteCwd) {
     terminalIds: [], links: [], layout: null,
     type: type || 'local', cwd: cwd || null,
     sshTarget: sshTarget || null, remoteCwd: remoteCwd || null,
-    messages: [],
   });
   switchWorkspace(id);
   persistWorkspaces();

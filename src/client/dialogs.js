@@ -2,12 +2,18 @@
 // Dialogs
 // ============================================
 
-import { S, activeWs, nextTermName } from './state.js';
+import {
+  S,
+  activeWs,
+  nextTermName,
+  DEFAULT_AGENT_PRESETS,
+  normalizeAgentPresets,
+  persistAgentPresets,
+} from './state.js';
 import { send } from './transport.js';
 import { createWorkspace, showWorkspaceDialog } from './workspace.js';
 import { destroyTerminalLocally } from './events.js';
 import { showNotif } from './notifications.js';
-import { getLinked } from './link-mode.js';
 
 export function showCreateDialog() {
   const d = document.getElementById('create-dialog');
@@ -34,67 +40,15 @@ export function showEditDialog(id) {
   document.getElementById('edit-name').focus(); document.getElementById('edit-name').select();
 }
 
-export function showSendDialog() {
-  const ws = activeWs();
-  if (!ws) return;
-
-  const sources = ws.terminalIds.filter((terminalId) => getLinked(terminalId, ws).length > 0);
-  if (sources.length === 0) {
-    showNotif('Link terminals before sending messages', 'warning');
-    return;
-  }
-
-  const sourceSelect = document.getElementById('send-source');
-  sourceSelect.innerHTML = '';
-  for (const id of sources) {
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = S.terminals.get(id)?.name || id;
-    sourceSelect.appendChild(option);
-  }
-
-  const preferredSource = sources.includes(S.activeTerminalId) ? S.activeTerminalId : sources[0];
-  sourceSelect.value = preferredSource;
-  refreshSendTargets(preferredSource);
-
-  document.getElementById('send-text').value = '';
-  document.getElementById('send-with-enter').checked = true;
-  document.getElementById('send-dialog').showModal();
-  document.getElementById('send-text').focus();
+export function showAgentPresetsDialog() {
+  const presets = normalizeAgentPresets(S.agentPresets);
+  document.getElementById('agent-claude-command').value = presets.claude.command;
+  document.getElementById('agent-codex-command').value = presets.codex.command;
+  document.getElementById('agent-presets-dialog').showModal();
+  document.getElementById('agent-claude-command').focus();
 }
 
 export function setupDialogEvents() {
-  // Send-to-linked dialog
-  document.getElementById('send-source').addEventListener('change', (e) => refreshSendTargets(e.target.value));
-  document.getElementById('send-confirm').addEventListener('click', () => {
-    const from = document.getElementById('send-source').value;
-    const to = document.getElementById('send-target').value;
-    const textInput = document.getElementById('send-text');
-    const rawText = textInput.value;
-    if (!to) {
-      showNotif('Select a linked target terminal', 'warning');
-      return;
-    }
-    if (!rawText.trim()) {
-      showNotif('Message cannot be empty', 'warning');
-      return;
-    }
-
-    const payloadText = document.getElementById('send-with-enter').checked && !rawText.endsWith('\n')
-      ? `${rawText}\n`
-      : rawText;
-
-    send('terminal:send-to-linked', { from, to, text: payloadText });
-    document.getElementById('send-dialog').close();
-  });
-  document.getElementById('send-cancel').addEventListener('click', () => document.getElementById('send-dialog').close());
-  document.getElementById('send-text').addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      document.getElementById('send-confirm').click();
-    }
-  });
-
   // Create dialog
   document.getElementById('create-confirm').addEventListener('click', () => {
     const name = document.getElementById('create-name').value.trim() || nextTermName();
@@ -147,6 +101,23 @@ export function setupDialogEvents() {
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
   document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('ws-confirm').click(); } });
 
+  // Agent presets dialog
+  document.getElementById('agent-presets-save').addEventListener('click', () => {
+    S.agentPresets = normalizeAgentPresets({
+      claude: { command: document.getElementById('agent-claude-command').value },
+      codex: { command: document.getElementById('agent-codex-command').value },
+    });
+    persistAgentPresets();
+    refreshAgentPresetButtons();
+    document.getElementById('agent-presets-dialog').close();
+    showNotif('Agent presets saved', 'success');
+  });
+  document.getElementById('agent-presets-cancel').addEventListener('click', () => document.getElementById('agent-presets-dialog').close());
+  document.getElementById('agent-presets-reset').addEventListener('click', () => {
+    document.getElementById('agent-claude-command').value = DEFAULT_AGENT_PRESETS.claude.command;
+    document.getElementById('agent-codex-command').value = DEFAULT_AGENT_PRESETS.codex.command;
+  });
+
   // Browse buttons for directory selection
   document.getElementById('create-cwd-browse').addEventListener('click', () => browseFolder('create-cwd'));
   document.getElementById('ws-cwd-browse').addEventListener('click', () => browseFolder('ws-cwd'));
@@ -166,15 +137,19 @@ export async function browseFolder(inputId) {
   }
 }
 
-function refreshSendTargets(sourceId) {
-  const ws = activeWs();
-  const targetSelect = document.getElementById('send-target');
-  targetSelect.innerHTML = '';
-
-  for (const id of getLinked(sourceId, ws)) {
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = S.terminals.get(id)?.name || id;
-    targetSelect.appendChild(option);
+export function refreshAgentPresetButtons() {
+  for (const button of document.querySelectorAll('.agent-launch-btn')) {
+    const preset = S.agentPresets?.[button.dataset.agent];
+    const hasCommand = !!preset?.command?.trim();
+    const label = button.dataset.label || button.textContent.trim();
+    const terminalId = button.closest('[data-tid]')?.dataset.tid;
+    const inTui = terminalId ? !!S.terminals.get(terminalId)?.inTui : false;
+    button.classList.toggle('is-empty', !hasCommand);
+    button.disabled = inTui;
+    button.title = !hasCommand
+      ? `Configure ${label} preset`
+      : inTui
+        ? `Exit the running program before launching ${label}`
+        : `Launch ${label}`;
   }
 }
