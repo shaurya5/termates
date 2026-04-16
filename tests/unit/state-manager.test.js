@@ -64,9 +64,12 @@ describe('StateManager', () => {
               migrated.workspaces[0].terminalIds = (data.terminals || []).map(t => t.id);
               migrated.workspaces[0].links = data.links || [];
               migrated.workspaces[0].layout = data.layout || null;
+              migrated.workspaces = migrated.workspaces.map(ws => this._normalizeWorkspace(ws));
               this.state = migrated;
             } else {
-              this.state = { ...this._default(), ...data };
+              const nextState = { ...this._default(), ...data };
+              nextState.workspaces = (data.workspaces || nextState.workspaces).map(ws => this._normalizeWorkspace(ws));
+              this.state = nextState;
             }
             return true;
           }
@@ -157,6 +160,20 @@ describe('StateManager', () => {
       expect(sm2.get().workspaces[0].links[0].from).toBe('t1');
     });
 
+    it('preserves workspace messages after saveNow() and fresh load()', () => {
+      const sm = new StateManager();
+      const ws = sm.get().workspaces[0];
+      ws.messages = [{ id: 'm1', from: 't1', to: 't2', text: 'hello', timestamp: 123 }];
+      sm.setWorkspaces(sm.get().workspaces);
+      sm.saveNow();
+
+      const sm2 = new StateManager();
+      sm2.load();
+      expect(sm2.get().workspaces[0].messages).toEqual([
+        { id: 'm1', from: 't1', to: 't2', text: 'hello', timestamp: 123 },
+      ]);
+    });
+
     it('load() returns true when a state file exists', () => {
       const sm = new StateManager();
       sm.saveNow();
@@ -239,6 +256,22 @@ describe('StateManager', () => {
       const sm = new StateManager();
       sm.load();
       expect(sm.get().nextTerminalId).toBe(5);
+    });
+  });
+
+  describe('workspace normalization', () => {
+    it('adds missing workspace defaults when loading an older v2 state', () => {
+      fs.writeFileSync(path.join(tmpDir, 'state.json'), JSON.stringify({
+        version: 2,
+        workspaces: [{ id: 'w1', name: 'Main', terminalIds: ['t1'] }],
+        activeWorkspaceId: 'w1',
+      }));
+
+      const sm = new StateManager();
+      sm.load();
+      expect(sm.get().workspaces[0].cwd).toBeNull();
+      expect(sm.get().workspaces[0].messages).toEqual([]);
+      expect(sm.get().workspaces[0].links).toEqual([]);
     });
   });
 

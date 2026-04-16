@@ -43,7 +43,8 @@ vi.mock('node-pty', () => ({
 }));
 
 vi.mock('child_process', () => ({
-  execSync(_cmd, _opts) { return ''; },
+  execSync: vi.fn(() => ''),
+  execFileSync: vi.fn(() => ''),
 }));
 
 vi.mock('fs', async (importOriginal) => {
@@ -59,6 +60,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { PtyManager } from '../../server/pty-manager.js';
+import { execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -262,6 +264,22 @@ describe('resize()', () => {
     mgr.create({ id: 'rs3', name: 'Test' });
     _lastMockPty.resize.mockImplementation(() => { throw new Error('resize failed'); });
     expect(mgr.resize('rs3', 80, 24)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reattach()
+// ---------------------------------------------------------------------------
+
+describe('reattach()', () => {
+  it('reapplies transparent tmux config with mouse off', () => {
+    vi.mocked(execSync).mockClear();
+
+    const terminal = mgr.reattach({ id: 'rt1', name: 'Restored' });
+
+    expect(terminal).not.toBeNull();
+    expect(vi.mocked(execSync).mock.calls.some(([cmd]) => cmd.includes('mouse off'))).toBe(true);
+    expect(vi.mocked(execSync).mock.calls.some(([cmd]) => cmd.includes('mouse on'))).toBe(false);
   });
 });
 

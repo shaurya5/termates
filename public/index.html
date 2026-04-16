@@ -61,6 +61,18 @@
         <ul id="link-list" class="panel-list"></ul>
       </div>
 
+      <div class="sidebar-section">
+        <div class="section-header">
+          <span class="section-title">Messages</span>
+          <div class="section-actions">
+            <button id="btn-compose-message" class="icon-btn" title="Send to linked terminal (Ctrl+Shift+M)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </button>
+          </div>
+        </div>
+        <ul id="message-list" class="panel-list message-list"></ul>
+      </div>
+
       <!-- Workspace info panel -->
       <div id="ws-info" class="ws-info"></div>
 
@@ -143,10 +155,13 @@
     <dialog id="send-dialog">
       <div class="dialog-header">Send to Linked Terminal</div>
       <div class="dialog-body">
+        <label for="send-source">From:</label>
+        <select id="send-source"></select>
         <label for="send-target">Target Terminal:</label>
         <select id="send-target"></select>
         <label for="send-text">Message:</label>
         <textarea id="send-text" rows="4" placeholder="Enter command or message to send..."></textarea>
+        <label class="checkbox-label"><input id="send-with-enter" type="checkbox" checked> Press Enter after sending</label>
       </div>
       <div class="dialog-footer">
         <button id="send-cancel" class="btn btn-secondary">Cancel</button>

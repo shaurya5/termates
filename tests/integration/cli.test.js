@@ -253,6 +253,43 @@ describe('CLI notify command', () => {
   });
 });
 
+describe('CLI broadcast and inbox commands', () => {
+  let senderId;
+  let receiverId;
+
+  it('creates two linked terminals for messaging', async () => {
+    const sender = await runCli(['new', '-n', 'BroadcastSender']);
+    const receiver = await runCli(['new', '-n', 'BroadcastReceiver']);
+    expect(sender.code).toBe(0);
+    expect(receiver.code).toBe(0);
+
+    senderId = sender.stdout.match(/\b(t\d+)\b/)[1];
+    receiverId = receiver.stdout.match(/\b(t\d+)\b/)[1];
+
+    const link = await runCli(['link', senderId, receiverId]);
+    expect(link.code).toBe(0);
+  });
+
+  it('termates broadcast sends to all linked terminals from the source terminal', async () => {
+    const result = await runCli(['broadcast', '--from', senderId, 'hello team']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Sent to 1 linked terminal');
+  });
+
+  it('termates inbox shows persisted recent messages for a terminal', async () => {
+    const result = await runCli(['inbox', receiverId, '-l', '5']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('hello team');
+    expect(result.stdout).toContain('BroadcastSender');
+    expect(result.stdout).toContain('BroadcastReceiver');
+  });
+
+  it('cleans up broadcast test terminals', async () => {
+    await runCli(['destroy', senderId]);
+    await runCli(['destroy', receiverId]);
+  });
+});
+
 describe('CLI error cases', () => {
   it('termates destroy nonexistent terminal exits non-zero', async () => {
     const { code } = await runCli(['destroy', 'nonexistent_terminal_id']);

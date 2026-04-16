@@ -126,10 +126,8 @@ describe('parseSSHConfig()', () => {
     expect(hosts).toHaveLength(2);
     expect(hosts[0].host).toBe('alpha');
     expect(hosts[1].host).toBe('beta');
-    // Known limitation: only the LAST host on a multi-host line gets the
-    // subsequent config lines (HostName, User, etc). OpenSSH applies them
-    // to all hosts. The first host gets null fields.
-    expect(hosts[0].hostname).toBeNull();
+    expect(hosts[0].hostname).toBe('10.0.0.1');
+    expect(hosts[0].user).toBe('shared');
     expect(hosts[1].hostname).toBe('10.0.0.1');
     expect(hosts[1].user).toBe('shared');
   });
@@ -144,6 +142,19 @@ describe('parseSSHConfig()', () => {
     const hosts = parseSSHConfig();
     expect(hosts).toHaveLength(1);
     expect(hosts[0].host).toBe('myhost');
+  });
+
+  it('filters wildcard hosts from mixed Host lines while keeping exact hosts', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue([
+      'Host dev? prod',
+      '  HostName 10.0.0.2',
+    ].join('\n'));
+
+    const hosts = parseSSHConfig();
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0].host).toBe('prod');
+    expect(hosts[0].hostname).toBe('10.0.0.2');
   });
 
   it('skips comment lines', () => {
@@ -398,6 +409,11 @@ describe('buildRemoteTmuxCommand()', () => {
     const { remoteCmd } = buildRemoteTmuxCommand('user@host', 'termates-t1', '~/myproject');
     expect(remoteCmd).toContain('$HOME/myproject');
     expect(remoteCmd).not.toContain('~/myproject');
+  });
+
+  it('remoteCmd quotes remoteCwd paths that contain spaces or quotes', () => {
+    const { remoteCmd } = buildRemoteTmuxCommand('user@host', 'termates-t1', "~/project with \"quotes\" and $vars");
+    expect(remoteCmd).toContain('cd "$HOME/project with \\"quotes\\" and \\$vars"');
   });
 
   it('remoteCmd does not include cd when remoteCwd is omitted', () => {

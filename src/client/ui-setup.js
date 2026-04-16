@@ -4,7 +4,7 @@
 
 import { S, activeWs, nextTermName } from './state.js';
 import { send } from './transport.js';
-import { showCreateDialog } from './dialogs.js';
+import { showCreateDialog, showSendDialog } from './dialogs.js';
 import { toggleBrowser, addBrowserTab, navigateBrowserTab, renderBrowserTabs, persistBrowser, setupBrowserResize } from './browser-panel.js';
 import { enterLinkMode, exitLinkMode } from './link-mode.js';
 import { showWorkspaceDialog, deleteWorkspace } from './workspace.js';
@@ -15,6 +15,7 @@ export function setupUI() {
   document.addEventListener('contextmenu', (e) => e.preventDefault(), true);
 
   document.getElementById('btn-new-terminal').addEventListener('click', showCreateDialog);
+  document.getElementById('btn-compose-message').addEventListener('click', showSendDialog);
   document.getElementById('btn-toggle-browser').addEventListener('click', () => toggleBrowser());
   document.getElementById('btn-link-mode').addEventListener('click', () => S.linkMode ? exitLinkMode() : enterLinkMode());
   document.getElementById('btn-cancel-link').addEventListener('click', exitLinkMode);

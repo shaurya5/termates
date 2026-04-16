@@ -13,7 +13,7 @@ export function parseSSHConfig() {
     const content = fs.readFileSync(SSH_CONFIG_PATH, 'utf-8');
     const lines = content.split('\n');
 
-    let current = null;
+    let currentHosts = [];
     for (const raw of lines) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
@@ -24,19 +24,23 @@ export function parseSSHConfig() {
 
       if (key.toLowerCase() === 'host') {
         // Skip wildcard-only entries
-        if (value === '*' || value.includes('?')) continue;
+        if (value === '*') continue;
         // Could be multiple hosts on one line
+        currentHosts = [];
         for (const h of value.split(/\s+/)) {
           if (h === '*' || h.includes('?')) continue;
-          current = { host: h, hostname: null, user: null, port: null, identityFile: null };
-          hosts.push(current);
+          const host = { host: h, hostname: null, user: null, port: null, identityFile: null };
+          currentHosts.push(host);
+          hosts.push(host);
         }
-      } else if (current) {
-        switch (key.toLowerCase()) {
-          case 'hostname': current.hostname = value; break;
-          case 'user': current.user = value; break;
-          case 'port': current.port = value; break;
-          case 'identityfile': current.identityFile = value; break;
+      } else if (currentHosts.length > 0) {
+        for (const current of currentHosts) {
+          switch (key.toLowerCase()) {
+            case 'hostname': current.hostname = value; break;
+            case 'user': current.user = value; break;
+            case 'port': current.port = value; break;
+            case 'identityfile': current.identityFile = value; break;
+          }
         }
       }
     }
@@ -92,7 +96,7 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
   const kill = `tmux kill-session -t ${sessionName} 2>/dev/null;`;
   const tmuxOpts = `\\; set mouse off \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
   if (remoteCwd) {
-    const expandedCwd = remoteCwd.replace(/^~/, '$HOME');
+    const expandedCwd = shellEscapeRemoteCwd(remoteCwd);
     remoteCmd = `${kill} cd ${expandedCwd} && tmux new-session -s ${sessionName} ${tmuxOpts}`;
   } else {
     remoteCmd = `${kill} tmux new-session -s ${sessionName} ${tmuxOpts}`;
@@ -115,4 +119,16 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
 
 function shellEscape(s) {
   return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+function shellEscapeRemoteCwd(remoteCwd) {
+  if (remoteCwd === '~') return '"$HOME"';
+  if (remoteCwd.startsWith('~/')) {
+    return `"${`$HOME${escapeForDoubleQuotes(remoteCwd.slice(1))}`}"`;
+  }
+  return shellEscape(remoteCwd);
+}
+
+function escapeForDoubleQuotes(s) {
+  return s.replace(/["\\`$]/g, '\\$&');
 }

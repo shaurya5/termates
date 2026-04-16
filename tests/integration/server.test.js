@@ -312,6 +312,12 @@ describe('WebSocket', () => {
       const linked = await ws.next(m => m.type === 'terminal:linked');
       expect(linked.payload).toMatchObject({ from: idA, to: idB });
 
+      ws.send('terminal:list');
+      const listed = await ws.next(m => m.type === 'terminal:list');
+      expect(listed.payload.workspaces[0].links).toEqual(
+        expect.arrayContaining([{ from: idA, to: idB }]),
+      );
+
       // Cleanup
       ws.send('terminal:destroy', { id: idA });
       await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idA);
@@ -339,6 +345,12 @@ describe('WebSocket', () => {
       ws.send('terminal:unlink', { from: idA, to: idB });
       const unlinked = await ws.next(m => m.type === 'terminal:unlinked');
       expect(unlinked.payload).toMatchObject({ from: idA, to: idB });
+
+      ws.send('terminal:list');
+      const listed = await ws.next(m => m.type === 'terminal:list');
+      expect(listed.payload.workspaces[0].links.some(link =>
+        (link.from === idA && link.to === idB) || (link.from === idB && link.to === idA),
+      )).toBe(false);
 
       ws.send('terminal:destroy', { id: idA });
       await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === idA);
@@ -490,6 +502,13 @@ describe('WebSocket (state verification)', () => {
       expect(msg.payload.to).toBe(to);
       expect(msg.payload.text).toBe('hello linked');
       expect(msg.payload).toHaveProperty('timestamp');
+      expect(msg.payload).toHaveProperty('workspaceId');
+
+      ws.send('terminal:list');
+      const listed = await ws.next(m => m.type === 'terminal:list');
+      const messageWorkspace = listed.payload.workspaces.find(w => w.id === msg.payload.workspaceId);
+      expect(messageWorkspace.messages.some(message =>
+        message.from === from && message.to === to && message.text === 'hello linked')).toBe(true);
 
       // Cleanup
       ws.send('terminal:destroy', { id: from });
@@ -670,9 +689,9 @@ describe('HTTP (extended)', () => {
 
   it('POST /api/browse-dialog returns JSON response', async () => {
     const res = await fetch(`${BASE_URL}/api/browse-dialog`, { method: 'POST' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(501);
     const body = await res.json();
-    // In server mode (no Electron), should return null path with error
+    expect(body.error).toContain('Electron desktop app');
     expect(body).toHaveProperty('path');
   });
 

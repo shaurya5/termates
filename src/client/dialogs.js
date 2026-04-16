@@ -7,6 +7,7 @@ import { send } from './transport.js';
 import { createWorkspace, showWorkspaceDialog } from './workspace.js';
 import { destroyTerminalLocally } from './events.js';
 import { showNotif } from './notifications.js';
+import { getLinked } from './link-mode.js';
 
 export function showCreateDialog() {
   const d = document.getElementById('create-dialog');
@@ -33,7 +34,67 @@ export function showEditDialog(id) {
   document.getElementById('edit-name').focus(); document.getElementById('edit-name').select();
 }
 
+export function showSendDialog() {
+  const ws = activeWs();
+  if (!ws) return;
+
+  const sources = ws.terminalIds.filter((terminalId) => getLinked(terminalId, ws).length > 0);
+  if (sources.length === 0) {
+    showNotif('Link terminals before sending messages', 'warning');
+    return;
+  }
+
+  const sourceSelect = document.getElementById('send-source');
+  sourceSelect.innerHTML = '';
+  for (const id of sources) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = S.terminals.get(id)?.name || id;
+    sourceSelect.appendChild(option);
+  }
+
+  const preferredSource = sources.includes(S.activeTerminalId) ? S.activeTerminalId : sources[0];
+  sourceSelect.value = preferredSource;
+  refreshSendTargets(preferredSource);
+
+  document.getElementById('send-text').value = '';
+  document.getElementById('send-with-enter').checked = true;
+  document.getElementById('send-dialog').showModal();
+  document.getElementById('send-text').focus();
+}
+
 export function setupDialogEvents() {
+  // Send-to-linked dialog
+  document.getElementById('send-source').addEventListener('change', (e) => refreshSendTargets(e.target.value));
+  document.getElementById('send-confirm').addEventListener('click', () => {
+    const from = document.getElementById('send-source').value;
+    const to = document.getElementById('send-target').value;
+    const textInput = document.getElementById('send-text');
+    const rawText = textInput.value;
+    if (!to) {
+      showNotif('Select a linked target terminal', 'warning');
+      return;
+    }
+    if (!rawText.trim()) {
+      showNotif('Message cannot be empty', 'warning');
+      return;
+    }
+
+    const payloadText = document.getElementById('send-with-enter').checked && !rawText.endsWith('\n')
+      ? `${rawText}\n`
+      : rawText;
+
+    send('terminal:send-to-linked', { from, to, text: payloadText });
+    document.getElementById('send-dialog').close();
+  });
+  document.getElementById('send-cancel').addEventListener('click', () => document.getElementById('send-dialog').close());
+  document.getElementById('send-text').addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('send-confirm').click();
+    }
+  });
+
   // Create dialog
   document.getElementById('create-confirm').addEventListener('click', () => {
     const name = document.getElementById('create-name').value.trim() || nextTermName();
@@ -94,9 +155,26 @@ export function setupDialogEvents() {
 export async function browseFolder(inputId) {
   try {
     const res = await fetch('/api/browse-dialog', { method: 'POST' });
-    const { path } = await res.json();
-    if (path) document.getElementById(inputId).value = path;
+    const { path, error } = await res.json();
+    if (path) {
+      document.getElementById(inputId).value = path;
+      return;
+    }
+    showNotif(error || 'Directory browsing is only available in the desktop app', 'warning');
   } catch (e) {
-    showNotif('Browse not available in this mode', 'warning');
+    showNotif('Directory browsing is only available in the desktop app', 'warning');
+  }
+}
+
+function refreshSendTargets(sourceId) {
+  const ws = activeWs();
+  const targetSelect = document.getElementById('send-target');
+  targetSelect.innerHTML = '';
+
+  for (const id of getLinked(sourceId, ws)) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = S.terminals.get(id)?.name || id;
+    targetSelect.appendChild(option);
   }
 }

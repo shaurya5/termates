@@ -10,7 +10,7 @@ import { renderLayout, fitAll, addTerminalToLayout, updatePanelStatus, updateLin
 import { setActive } from './link-mode.js';
 import { toggleBrowser, renderBrowserTabs } from './browser-panel.js';
 import { showNotif } from './notifications.js';
-import { buildBalancedLayout } from '../../shared/layout-tree.js';
+import { reconcileWorkspacesWithTerminals, removeTerminalFromWorkspaceState } from './workspace-state.js';
 
 export function handleMsg(msg) {
   switch (msg.type) {
@@ -23,6 +23,7 @@ export function handleMsg(msg) {
     case 'terminal:unlinked': onUnlinked(msg.payload); break;
     case 'terminal:status-changed': onStatusChanged(msg.payload); break;
     case 'terminal:notification': onNotif(msg.payload); break;
+    case 'terminal:message-sent': onMessageSent(msg.payload); break;
     case 'terminal:list': onList(msg.payload); break;
   }
 }
@@ -50,11 +51,7 @@ export function destroyTerminalLocally(id) {
     try { t.xterm.dispose(); } catch (e) { /* WebGL context may already be lost */ }
     S.terminals.delete(id);
   }
-  for (const ws of S.workspaces) {
-    ws.terminalIds = ws.terminalIds.filter(tid => tid !== id);
-    ws.links = ws.links.filter(l => l.from !== id && l.to !== id);
-    ws.layout = buildBalancedLayout(ws.terminalIds);
-  }
+  S.workspaces = removeTerminalFromWorkspaceState(S.workspaces, id);
   persistWorkspaces();
   renderLayout();
   updateSidebar();
@@ -106,6 +103,34 @@ export function onNotif({ id, status, text }) {
   if (t) { t.status = status; updateSidebar(); updatePanelStatus(id); showNotif(`${t.name}: ${text || status}`, status); }
 }
 
+export function onMessageSent(payload) {
+  const targetWorkspace = payload.workspaceId
+    ? S.workspaces.find((workspace) => workspace.id === payload.workspaceId)
+    : S.workspaces.find((workspace) =>
+      (workspace.terminalIds || []).includes(payload.from) && (workspace.terminalIds || []).includes(payload.to));
+  if (!targetWorkspace) return;
+
+  targetWorkspace.messages = targetWorkspace.messages || [];
+  if (!targetWorkspace.messages.some((message) => message.id && message.id === payload.id)) {
+    targetWorkspace.messages.push({
+      id: payload.id || `${payload.timestamp}-${payload.from}-${payload.to}`,
+      from: payload.from,
+      to: payload.to,
+      text: payload.text,
+      timestamp: payload.timestamp,
+    });
+    if (targetWorkspace.messages.length > 200) {
+      targetWorkspace.messages = targetWorkspace.messages.slice(-200);
+    }
+  }
+
+  updateSidebar();
+  const fromName = S.terminals.get(payload.from)?.name || payload.from;
+  const toName = S.terminals.get(payload.to)?.name || payload.to;
+  const preview = String(payload.text || '').replace(/\s+/g, ' ').trim();
+  showNotif(`${fromName} -> ${toName}: ${preview}`, 'attention');
+}
+
 export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspaceId, browserTabs, activeBrowserTab, browserOpen, browserWidth }) {
   if (browserTabs?.length) { S.browserTabs = browserTabs; S.activeBrowserTab = activeBrowserTab || 0; }
   if (browserOpen) S.browserOpen = true;
@@ -127,23 +152,9 @@ export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspace
       const { xterm, fitAddon } = createXterm(t.id);
       S.terminals.set(t.id, { id: t.id, name: t.name, role: t.role, status: t.status || 'idle', xterm, fitAddon });
     }
-    // Prune workspace terminalIds to only existing terminals, rebuild layouts
-    const existingIds = new Set(terminals.map(t => t.id));
-    for (const ws of S.workspaces) {
-      ws.terminalIds = ws.terminalIds.filter(id => existingIds.has(id));
-      ws.links = ws.links.filter(l => existingIds.has(l.from) && existingIds.has(l.to));
-      // Always rebuild balanced layout from current terminal list
-      ws.layout = buildBalancedLayout(ws.terminalIds);
-    }
-    // Check for orphaned terminals
-    const assigned = new Set(S.workspaces.flatMap(w => w.terminalIds));
-    const orphans = terminals.filter(t => !assigned.has(t.id));
-    if (orphans.length) {
-      const ws = activeWs();
-      for (const t of orphans) ws.terminalIds.push(t.id);
-      ws.layout = buildBalancedLayout(ws.terminalIds);
-    }
   }
+
+  S.workspaces = reconcileWorkspacesWithTerminals(S.workspaces, terminals || [], S.activeWorkspaceId);
 
   renderLayout();
   updateSidebar();

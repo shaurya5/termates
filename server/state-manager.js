@@ -16,7 +16,7 @@ export class StateManager {
     return {
       version: 2,
       workspaces: [
-        { id: 'w1', name: 'Workspace 1', terminalIds: [], links: [], layout: null, type: 'local', sshTarget: null, remoteCwd: null },
+        this._normalizeWorkspace({ id: 'w1', name: 'Workspace 1' }),
       ],
       activeWorkspaceId: 'w1',
       nextWorkspaceId: 2,
@@ -27,6 +27,21 @@ export class StateManager {
       browserOpen: false,
       browserWidth: 0.35,
       nextBrowserTabId: 1,
+    };
+  }
+
+  _normalizeWorkspace(workspace = {}) {
+    return {
+      id: workspace.id,
+      name: workspace.name,
+      terminalIds: workspace.terminalIds || [],
+      links: workspace.links || [],
+      layout: workspace.layout || null,
+      type: workspace.type || (workspace.sshTarget ? 'remote' : 'local'),
+      cwd: workspace.cwd || null,
+      sshTarget: workspace.sshTarget || null,
+      remoteCwd: workspace.remoteCwd || null,
+      messages: workspace.messages || [],
     };
   }
 
@@ -55,9 +70,12 @@ export class StateManager {
           migrated.workspaces[0].terminalIds = (data.terminals || []).map(t => t.id);
           migrated.workspaces[0].links = data.links || [];
           migrated.workspaces[0].layout = data.layout || null;
+          migrated.workspaces = migrated.workspaces.map(ws => this._normalizeWorkspace(ws));
           this.state = migrated;
         } else {
-          this.state = { ...this._default(), ...data };
+          const nextState = { ...this._default(), ...data };
+          nextState.workspaces = (data.workspaces || nextState.workspaces).map(ws => this._normalizeWorkspace(ws));
+          this.state = nextState;
         }
         return true;
       }

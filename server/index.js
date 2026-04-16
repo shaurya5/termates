@@ -11,8 +11,9 @@ import { LinkManager } from './link-manager.js';
 import { StateManager } from './state-manager.js';
 import { parseSSHConfig } from './ssh-config.js';
 import {
-  persistState, addTerminalToWorkspace, removeTerminalFromWorkspaces,
+  persistState, addTerminalToWorkspace, addLinkToWorkspace, removeLinkFromWorkspaces, removeTerminalFromWorkspaces,
   subscribeTerminalOutput, cleanupDeadTerminal, restoreSession,
+  recordWorkspaceMessage, getMessagesForTerminal,
 } from './orchestration.js';
 import { setupWebSocket } from './ws-handler.js';
 import { setupCliSocket } from './cli-handler.js';
@@ -71,8 +72,12 @@ const ctx = {
   sendTo,
   persistState: doPersist,
   addTerminalToWorkspace: doAddToWorkspace,
+  addLinkToWorkspace: (from, to) => addLinkToWorkspace(stateManager, from, to),
+  removeLinkFromWorkspaces: (from, to) => removeLinkFromWorkspaces(stateManager, from, to),
   removeTerminalFromWorkspaces: doRemoveFromWorkspaces,
   subscribeTerminalOutput: doSubscribe,
+  recordWorkspaceMessage: (from, to, text) => recordWorkspaceMessage(stateManager, from, to, text),
+  getMessagesForTerminal: (terminalId, limit) => getMessagesForTerminal(stateManager, terminalId, limit),
 };
 
 // --- WebSocket Server ---
@@ -143,7 +148,7 @@ app.post('/api/browse-dialog', async (req, res) => {
     const selected = await global.termatesDialog.browseFolder();
     res.json({ path: selected });
   } else {
-    res.json({ path: null, error: 'Native dialog not available in server mode' });
+    res.status(501).json({ path: null, error: 'Directory browsing is only available in the Electron desktop app' });
   }
 });
 
@@ -216,14 +221,14 @@ app.get('/api/update/status', async (req, res) => {
     res.json({ status: u.status, currentVersion: u.currentVersion, latestVersion: u.latestVersion, releaseNotes: u.releaseNotes, releaseUrl: u.releaseUrl || null, progress: u.progress, error: u.error });
   } else {
     try {
-      const ghRes = await fetch('https://api.github.com/repos/shaurya5/termates/releases/latest', { headers: { 'User-Agent': 'Termates' } });
-      if (!ghRes.ok) { res.json({ status: 'idle', currentVersion: '1.0.0' }); return; }
-      const data = await ghRes.json();
       const pkg = await import('../package.json', { with: { type: 'json' } });
       const current = pkg.default.version;
+      const ghRes = await fetch('https://api.github.com/repos/shaurya5/termates/releases/latest', { headers: { 'User-Agent': 'Termates' } });
+      if (!ghRes.ok) { res.json({ status: 'idle', currentVersion: current }); return; }
+      const data = await ghRes.json();
       const latest = data.tag_name?.replace(/^v/, '');
       res.json({ status: latest !== current ? 'available' : 'idle', currentVersion: current, latestVersion: latest, releaseUrl: data.html_url, releaseNotes: data.body });
-    } catch (e) { res.json({ status: 'idle', currentVersion: '1.0.0' }); }
+    } catch (e) { res.json({ status: 'idle', currentVersion: '2.0.0' }); }
   }
 });
 
@@ -258,20 +263,6 @@ httpServer.on('error', (err) => {
   }
   throw err;
 });
-
-// --- Shutdown: save state, detach PTYs (keep tmux alive), clean up socket ---
-function shutdown() {
-  doPersist();
-  stateManager.saveNow();
-  try { if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH); } catch (e) {}
-  ptyManager.detachAll(); // Detach PTYs but keep tmux sessions alive
-  unixServer.close();
-  httpServer.close();
-}
-
-process.on('SIGINT', () => { shutdown(); process.exit(0); });
-process.on('SIGTERM', () => { shutdown(); process.exit(0); });
-process.on('uncaughtException', (err) => { console.error('Uncaught:', err); shutdown(); process.exit(1); });
 
 httpServer.listen(PORT, '127.0.0.1', () => {
   console.log('');

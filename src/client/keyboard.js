@@ -4,7 +4,7 @@
 
 import { S, activeWs, nextTermName } from './state.js';
 import { send } from './transport.js';
-import { showCreateDialog } from './dialogs.js';
+import { showCreateDialog, showSendDialog } from './dialogs.js';
 import { enterLinkMode, exitLinkMode, setActive, focusTerm } from './link-mode.js';
 import { destroyTerminalLocally } from './events.js';
 import { toggleBrowser } from './browser-panel.js';
@@ -19,6 +19,7 @@ export function setupKeys() {
         case 'H': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'horizontal'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); } break;
         case 'V': e.preventDefault(); if (S.activeTerminalId) { S._splitDir = 'vertical'; S._splitTarget = S.activeTerminalId; send('terminal:create', { name: nextTermName() }); } break;
         case 'L': e.preventDefault(); S.linkMode ? exitLinkMode() : enterLinkMode(); break;
+        case 'M': e.preventDefault(); showSendDialog(); break;
         case 'W': e.preventDefault(); if (S.activeTerminalId) { const _id = S.activeTerminalId; destroyTerminalLocally(_id); send('terminal:destroy', { id: _id }); } break;
         case 'N': e.preventDefault(); showWorkspaceDialog(); break;
       }

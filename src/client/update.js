@@ -22,7 +22,7 @@ async function checkForUpdate() {
       btn.className = 'update-btn';
       btn.onclick = async () => {
         if (u.releaseUrl) {
-          // In server-only mode, open the release page
+          // When no native updater hook is available, open the release page
           window.open(u.releaseUrl, '_blank');
         } else {
           // In Electron mode, trigger download

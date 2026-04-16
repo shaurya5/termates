@@ -156,7 +156,7 @@ export class PtyManager {
     // Apply our config to the existing session
     try {
       execSync(`tmux -f "${TMUX_CONF}" set -t "${tmuxSession}" status off 2>/dev/null`, { stdio: 'pipe' });
-      execSync(`tmux set -t "${tmuxSession}" mouse on 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`tmux set -t "${tmuxSession}" mouse off 2>/dev/null`, { stdio: 'pipe' });
       execSync(`tmux set -t "${tmuxSession}" escape-time 0 2>/dev/null`, { stdio: 'pipe' });
     } catch (e) { /* best effort */ }
 

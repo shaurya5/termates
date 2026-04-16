@@ -8,8 +8,8 @@ import { WebSocketServer, WebSocket } from 'ws';
  */
 function handleWsMessage(ws, msg, ctx) {
   const { ptyManager, linkManager, stateManager, broadcast, sendTo,
-          persistState, addTerminalToWorkspace, removeTerminalFromWorkspaces,
-          subscribeTerminalOutput } = ctx;
+          persistState, addTerminalToWorkspace, addLinkToWorkspace, removeLinkFromWorkspaces, removeTerminalFromWorkspaces,
+          subscribeTerminalOutput, recordWorkspaceMessage } = ctx;
   const { type, payload } = msg;
 
   switch (type) {
@@ -90,6 +90,7 @@ function handleWsMessage(ws, msg, ctx) {
     case 'terminal:link': {
       const { from, to } = payload;
       if (linkManager.link(from, to)) {
+        addLinkToWorkspace(from, to);
         broadcast({ type: 'terminal:linked', payload: { from, to } });
         persistState();
       }
@@ -99,6 +100,7 @@ function handleWsMessage(ws, msg, ctx) {
     case 'terminal:unlink': {
       const { from, to } = payload;
       if (linkManager.unlink(from, to)) {
+        removeLinkFromWorkspaces(from, to);
         broadcast({ type: 'terminal:unlinked', payload: { from, to } });
         persistState();
       }
@@ -107,9 +109,17 @@ function handleWsMessage(ws, msg, ctx) {
 
     case 'terminal:send-to-linked': {
       const { from, to, text } = payload;
-      if (linkManager.areLinked(from, to)) {
-        ptyManager.write(to, text);
-        broadcast({ type: 'terminal:message-sent', payload: { from, to, text, timestamp: Date.now() } });
+      const rawText = String(text || '');
+      if (linkManager.areLinked(from, to) && rawText.trim()) {
+        ptyManager.write(to, rawText);
+        const stored = recordWorkspaceMessage(from, to, rawText);
+        const fallbackText = rawText.replace(/\r?\n$/, '');
+        broadcast({
+          type: 'terminal:message-sent',
+          payload: stored
+            ? { workspaceId: stored.workspaceId, ...stored.message }
+            : { from, to, text: fallbackText, timestamp: Date.now() },
+        });
       }
       break;
     }
@@ -150,7 +160,13 @@ function handleWsMessage(ws, msg, ctx) {
 
     // --- Workspace sync ---
     case 'workspace:update': {
-      stateManager.setWorkspaces(payload.workspaces);
+      const existingById = new Map((stateManager.get().workspaces || []).map((workspace) => [workspace.id, workspace]));
+      const nextWorkspaces = (payload.workspaces || []).map((workspace) => ({
+        ...existingById.get(workspace.id),
+        ...workspace,
+        messages: existingById.get(workspace.id)?.messages || workspace.messages || [],
+      }));
+      stateManager.setWorkspaces(nextWorkspaces);
       if (payload.activeWorkspaceId !== undefined) stateManager.setActiveWorkspaceId(payload.activeWorkspaceId);
       if (payload.nextWorkspaceId !== undefined) stateManager.setNextWorkspaceId(payload.nextWorkspaceId);
       break;

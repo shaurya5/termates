@@ -4,11 +4,13 @@ import { program } from 'commander';
 import net from 'net';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SOCKET_PATH = path.join(os.tmpdir(), 'termates.sock');
+const APP_ROOT = path.join(__dirname, '..');
 
 function sendCommand(command) {
   return new Promise((resolve, reject) => {
@@ -30,7 +32,7 @@ function sendCommand(command) {
 
     client.on('error', (err) => {
       if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
-        reject(new Error('Termates server is not running. Start it with: termates start'));
+        reject(new Error('Termates is not running. Start the desktop app with: termates start'));
       } else {
         reject(err);
       }
@@ -45,21 +47,26 @@ function sendCommand(command) {
 
 program
   .name('termates')
-  .description('On-device terminal multiplexer with agent linking and browser support')
-  .version('1.0.0');
+  .description('Desktop terminal multiplexer with agent linking')
+  .version('2.0.0');
 
 program
   .command('start')
-  .description('Start the Termates server and open the UI')
-  .option('-p, --port <port>', 'Port number', '7680')
-  .action((options) => {
-    const serverPath = path.join(__dirname, '..', 'server', 'index.js');
-    const child = spawn('node', [serverPath], {
-      env: { ...process.env, PORT: options.port },
+  .description('Start the Termates desktop app')
+  .action(() => {
+    const electronCli = path.join(APP_ROOT, 'node_modules', 'electron', 'cli.js');
+    if (!fs.existsSync(electronCli)) {
+      console.error('Electron runtime not found. Run `npm install` first or open the packaged desktop app.');
+      process.exit(1);
+    }
+
+    const child = spawn(process.execPath, [electronCli, APP_ROOT], {
+      cwd: APP_ROOT,
+      env: { ...process.env },
       stdio: 'inherit',
     });
     child.on('error', (err) => {
-      console.error('Failed to start server:', err.message);
+      console.error('Failed to start desktop app:', err.message);
       process.exit(1);
     });
     process.on('SIGINT', () => child.kill('SIGINT'));
@@ -172,6 +179,51 @@ program
       const result = await sendCommand({ command: 'ask', from, to, text: textParts.join(' ') });
       if (result.ok) console.log('Message sent.');
       else { console.error('Error:', result.error); process.exit(1); }
+    } catch (err) { console.error(err.message); process.exit(1); }
+  });
+
+program
+  .command('broadcast <text...>')
+  .description('Send a message from one terminal to all of its linked terminals')
+  .option('-f, --from <terminal>', 'Source terminal ID or name (defaults to TERMATES_TERMINAL_ID)')
+  .action(async (textParts, options) => {
+    const from = options.from || process.env.TERMATES_TERMINAL_ID;
+    if (!from) {
+      console.error('Error: source terminal required. Use --from or run inside a Termates-managed terminal.');
+      process.exit(1);
+    }
+    try {
+      const result = await sendCommand({ command: 'broadcast', from, text: textParts.join(' ') });
+      if (result.ok) console.log(`Sent to ${result.count} linked terminal(s).`);
+      else { console.error('Error:', result.error); process.exit(1); }
+    } catch (err) { console.error(err.message); process.exit(1); }
+  });
+
+program
+  .command('inbox [target]')
+  .description('Show recent messages for a terminal')
+  .option('-l, --limit <n>', 'Number of messages', '20')
+  .action(async (target, options) => {
+    const resolvedTarget = target || process.env.TERMATES_TERMINAL_ID;
+    if (!resolvedTarget) {
+      console.error('Error: target terminal required. Pass a terminal or run inside a Termates-managed terminal.');
+      process.exit(1);
+    }
+    try {
+      const result = await sendCommand({
+        command: 'inbox',
+        target: resolvedTarget,
+        limit: parseInt(options.limit, 10),
+      });
+      if (!result.ok) { console.error('Error:', result.error); process.exit(1); }
+      if (!result.messages.length) {
+        console.log('No messages.');
+        return;
+      }
+      for (const message of result.messages) {
+        const when = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        console.log(`[${when}] ${message.fromName || message.from} -> ${message.toName || message.to}: ${message.text}`);
+      }
     } catch (err) { console.error(err.message); process.exit(1); }
   });
 

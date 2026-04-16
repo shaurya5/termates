@@ -9,13 +9,13 @@ import fs from 'fs';
  */
 function handleCliCommand(socket, msg, ctx) {
   const { ptyManager, linkManager, stateManager, broadcast,
-          persistState, addTerminalToWorkspace, removeTerminalFromWorkspaces,
-          subscribeTerminalOutput } = ctx;
+          persistState, addTerminalToWorkspace, addLinkToWorkspace, removeLinkFromWorkspaces, removeTerminalFromWorkspaces,
+          subscribeTerminalOutput, recordWorkspaceMessage, getMessagesForTerminal } = ctx;
   const respond = (data) => { try { socket.write(JSON.stringify(data) + '\n'); socket.end(); } catch (e) {} };
   try {
     switch (msg.command) {
       case 'ping':
-        respond({ ok: true, version: '1.0.0', uptime: process.uptime(), persistent: ptyManager.tmuxAvailable });
+        respond({ ok: true, version: '2.0.0', uptime: process.uptime(), persistent: ptyManager.tmuxAvailable });
         break;
 
       case 'list':
@@ -61,6 +61,7 @@ function handleCliCommand(socket, msg, ctx) {
         if (!from) { respond({ ok: false, error: `Terminal not found: ${msg.from}` }); break; }
         if (!to) { respond({ ok: false, error: `Terminal not found: ${msg.to}` }); break; }
         linkManager.link(from.id, to.id);
+        addLinkToWorkspace(from.id, to.id);
         broadcast({ type: 'terminal:linked', payload: { from: from.id, to: to.id } });
         persistState();
         respond({ ok: true, from: from.id, to: to.id });
@@ -69,7 +70,12 @@ function handleCliCommand(socket, msg, ctx) {
 
       case 'unlink': {
         const from = ptyManager.resolve(msg.from), to = ptyManager.resolve(msg.to);
-        if (from && to) { linkManager.unlink(from.id, to.id); broadcast({ type: 'terminal:unlinked', payload: { from: from.id, to: to.id } }); persistState(); }
+        if (from && to) {
+          linkManager.unlink(from.id, to.id);
+          removeLinkFromWorkspaces(from.id, to.id);
+          broadcast({ type: 'terminal:unlinked', payload: { from: from.id, to: to.id } });
+          persistState();
+        }
         respond({ ok: true });
         break;
       }
@@ -78,9 +84,55 @@ function handleCliCommand(socket, msg, ctx) {
         const from = ptyManager.resolve(msg.from), to = ptyManager.resolve(msg.to);
         if (!from || !to) { respond({ ok: false, error: 'Terminal(s) not found' }); break; }
         if (!linkManager.areLinked(from.id, to.id)) { respond({ ok: false, error: 'Terminals not linked' }); break; }
-        ptyManager.write(to.id, msg.text + '\n');
-        broadcast({ type: 'terminal:message-sent', payload: { from: from.id, to: to.id, text: msg.text, timestamp: Date.now() } });
+        const messageText = String(msg.text || '');
+        if (!messageText.trim()) { respond({ ok: false, error: 'Message cannot be empty' }); break; }
+        ptyManager.write(to.id, messageText + '\n');
+        const stored = recordWorkspaceMessage(from.id, to.id, messageText);
+        broadcast({
+          type: 'terminal:message-sent',
+          payload: stored
+            ? { workspaceId: stored.workspaceId, ...stored.message }
+            : { from: from.id, to: to.id, text: messageText.replace(/\r?\n$/, ''), timestamp: Date.now() },
+        });
         respond({ ok: true });
+        break;
+      }
+
+      case 'broadcast': {
+        const from = ptyManager.resolve(msg.from);
+        if (!from) { respond({ ok: false, error: 'Source terminal not found' }); break; }
+        const messageText = String(msg.text || '');
+        if (!messageText.trim()) { respond({ ok: false, error: 'Message cannot be empty' }); break; }
+        const linkedIds = linkManager.getLinkedTerminals(from.id);
+        if (linkedIds.length === 0) { respond({ ok: false, error: 'Source terminal has no linked terminals' }); break; }
+
+        let delivered = 0;
+        for (const toId of linkedIds) {
+          ptyManager.write(toId, messageText + '\n');
+          const stored = recordWorkspaceMessage(from.id, toId, messageText);
+          broadcast({
+            type: 'terminal:message-sent',
+            payload: stored
+              ? { workspaceId: stored.workspaceId, ...stored.message }
+              : { from: from.id, to: toId, text: messageText.replace(/\r?\n$/, ''), timestamp: Date.now() },
+          });
+          delivered++;
+        }
+
+        respond({ ok: true, count: delivered });
+        break;
+      }
+
+      case 'inbox': {
+        const t = ptyManager.resolve(msg.target || msg.id);
+        if (!t) { respond({ ok: false, error: 'Terminal not found' }); break; }
+        const savedTerminals = stateManager.get().terminals || [];
+        const withNames = getMessagesForTerminal(t.id, msg.limit || 20).map((message) => ({
+          ...message,
+          fromName: ptyManager.get(message.from)?.name || savedTerminals.find((terminal) => terminal.id === message.from)?.name || message.from,
+          toName: ptyManager.get(message.to)?.name || savedTerminals.find((terminal) => terminal.id === message.to)?.name || message.to,
+        }));
+        respond({ ok: true, id: t.id, messages: withNames });
         break;
       }
 
