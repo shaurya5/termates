@@ -259,6 +259,20 @@ httpServer.on('error', (err) => {
   throw err;
 });
 
+// --- Shutdown: save state, detach PTYs (keep tmux alive), clean up socket ---
+function shutdown() {
+  doPersist();
+  stateManager.saveNow();
+  try { if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH); } catch (e) {}
+  ptyManager.detachAll(); // Detach PTYs but keep tmux sessions alive
+  unixServer.close();
+  httpServer.close();
+}
+
+process.on('SIGINT', () => { shutdown(); process.exit(0); });
+process.on('SIGTERM', () => { shutdown(); process.exit(0); });
+process.on('uncaughtException', (err) => { console.error('Uncaught:', err); shutdown(); process.exit(1); });
+
 httpServer.listen(PORT, '127.0.0.1', () => {
   console.log('');
   console.log('  ╔══════════════════════════════════════╗');
