@@ -5,11 +5,98 @@
 import { S, activeWs, persistWorkspaces, nextTermName } from '../state.js';
 import { send } from '../transport.js';
 import { setActive, isLinked, handleLinkClick } from '../link-mode.js';
-import { showEditDialog } from '../dialogs.js';
+import { showAgentPresetsDialog, showEditDialog, refreshAgentPresetButtons } from '../dialogs.js';
 import { updateSidebar } from '../sidebar.js';
 import { splitInTree, buildBalancedLayout } from '../../../shared/layout-tree.js';
 import { destroyTerminalLocally } from '../events.js';
 import { showCreateDialog } from '../dialogs.js';
+import { showNotif } from '../notifications.js';
+
+// Reuse the same <div.terminal-container> (and the xterm DOM inside it) across
+// every renderLayout call. The layout tree is rebuilt from scratch on each
+// render; without this cache, every create/destroy/split re-opened xterm into a
+// fresh node, which re-initialised the WebGL atlas and lost rendering state.
+const containerCache = new Map(); // tid -> HTMLElement
+
+export function forgetContainer(id) {
+  containerCache.delete(id);
+}
+
+function getOrCreateContainer(id) {
+  let c = containerCache.get(id);
+  if (!c) {
+    c = document.createElement('div');
+    c.className = 'terminal-container';
+    containerCache.set(id, c);
+  }
+  return c;
+}
+
+// Open xterm once the container has real pixel dimensions, then: fit, restore
+// scrollback (shell only — never for a TUI), flush queued writes, and finally
+// flip `_opened` so new writes bypass the queue. Order matters: if we set
+// `_opened` earlier, live bytes arriving via onOutput would race the queue
+// flush and desync the cursor.
+function mountWhenSized(t, c, tid, attempt = 0) {
+  const hasSize = c.clientWidth > 0 && c.clientHeight > 0;
+  if (!hasSize && attempt < 30) {
+    // ~500ms total retry budget; still opens after that, but we attach a
+    // ResizeObserver below so a later layout fires a fit when the container
+    // finally gets real dimensions (e.g. workspace switched in).
+    requestAnimationFrame(() => mountWhenSized(t, c, tid, attempt + 1));
+    return;
+  }
+  t.xterm.open(c);
+  try {
+    t.fitAddon.fit();
+    send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
+  } catch (e) {}
+  // No scrollback restore. Writing a serialized snapshot into a fresh xterm
+  // while the live PTY stream is still going was producing overlap/cursor
+  // desync in both shell and TUI panes — saved bytes and live bytes would
+  // land on conflicting rows. If we want scrollback across reloads back as a
+  // feature, it needs a different design (e.g. server-side byte log replayed
+  // at the right size with the live stream paused). Reload now shows only
+  // current-screen state from the SIGWINCH + Ctrl+L nudge; for deeper
+  // history, Claude Code has its own in-UI scrolling (Ctrl+O to expand).
+  // Drain the queue exactly once. onOutput is still gated on `_opened` so new
+  // bytes keep landing in _pendingWrites while we drain.
+  const queue = t._pendingWrites;
+  t._pendingWrites = null;
+  if (queue?.length) {
+    for (const chunk of queue) {
+      try { t.xterm.write(chunk); } catch (e) {}
+    }
+  }
+  // Any bytes that arrived while we were draining went into a freshly-
+  // allocated queue. Move them across now.
+  const lateQueue = t._pendingWrites;
+  t._pendingWrites = null;
+  if (lateQueue?.length) {
+    for (const chunk of lateQueue) {
+      try { t.xterm.write(chunk); } catch (e) {}
+    }
+  }
+  // Now live writes can go straight through.
+  t._opened = true;
+  try { t.xterm.refresh(0, t.xterm.rows - 1); } catch (e) {}
+
+  // Watch this specific container for size changes — catches the case where
+  // we opened with zero/wrong dimensions (workspace hidden, parent not yet
+  // laid out) and the real size lands later. A size change here triggers a
+  // fit, which propagates to the server via fitAll's resize-on-change.
+  try {
+    const ro = new ResizeObserver(() => {
+      try { fitAll(); } catch (e) {}
+    });
+    ro.observe(c);
+    t._resizeObserver = ro;
+  } catch (e) {}
+
+  // Ask the server to nudge the PTY so the inner TUI/shell re-emits its
+  // current screen if it wasn't otherwise going to write.
+  send('terminal:refresh', { id: tid });
+}
 
 // ============================================
 // Layout Rendering
@@ -45,21 +132,19 @@ export function renderLayout() {
   }
   if (!ws.layout) { root.appendChild(createWelcome()); return; }
   root.appendChild(renderNode(ws.layout));
-  requestAnimationFrame(() => {
-    for (const tid of ws.terminalIds) {
-      const t = S.terminals.get(tid);
-      if (!t) continue;
-      const c = document.querySelector(`[data-tid="${tid}"] .terminal-container`);
-      if (c && !c.querySelector('.xterm')) {
-        t.xterm.open(c);
-        // Activate WebGL renderer after DOM attachment
-        try { if (t.xterm._webglAddon) t.xterm.loadAddon(t.xterm._webglAddon); } catch (e) { /* WebGL unavailable, canvas fallback */ }
-        t.fitAddon.fit();
-        send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
-      }
-    }
-    fitAll();
-  });
+  // Defer the xterm mount for each terminal until its container actually has
+  // non-zero dimensions. In Electron the first paint frame sometimes lands
+  // with clientWidth = 0, which makes fit() no-op and leaves xterm stuck at
+  // the default 80×24 — that's why "manually resize the window" was the
+  // only workaround (it triggers a second fit with real dimensions).
+  for (const tid of ws.terminalIds) {
+    const t = S.terminals.get(tid);
+    if (!t || t._opened) continue;
+    const c = containerCache.get(tid);
+    if (!c) continue;
+    mountWhenSized(t, c, tid);
+  }
+  fitAll();
 }
 
 export function renderNode(n) {
@@ -104,7 +189,9 @@ export function setupResize(handle, node, p1, p2) {
         p1.style.height = `calc(${node.ratio * 100}% - 2px)`;
         p2.style.height = `calc(${(1 - node.ratio) * 100}% - 2px)`;
       }
-      fitAll();
+      // Deliberately NOT calling fitAll() during drag — reflowing xterm on
+      // every mousemove while new bytes stream in corrupts the scrollback.
+      // The content briefly renders at the old cell grid; mouseup fits once.
     };
     const up = () => {
       handle.classList.remove('dragging');
@@ -139,6 +226,12 @@ export function createTermPanel(id) {
   hdr.appendChild(dot); hdr.appendChild(nm);
   if (t.role) { const b = document.createElement('span'); b.className = `panel-role terminal-role-badge ${t.role}`; b.textContent = t.role; hdr.appendChild(b); }
 
+  const launchers = document.createElement('div');
+  launchers.className = 'panel-launchers';
+  launchers.appendChild(createAgentLaunchButton('claude', 'Claude', id));
+  launchers.appendChild(createAgentLaunchButton('codex', 'Codex', id));
+  hdr.appendChild(launchers);
+
   const acts = document.createElement('div'); acts.className = 'panel-actions';
   const mkSvgBtn = (svg, fn, cls, title) => {
     const b = document.createElement('button'); b.className = 'panel-action-btn' + (cls ? ' ' + cls : '');
@@ -152,7 +245,7 @@ export function createTermPanel(id) {
   acts.appendChild(mkSvgBtn('<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', () => { destroyTerminalLocally(id); send('terminal:destroy', { id }); }, 'close', 'Close'));
   hdr.appendChild(acts);
 
-  const container = document.createElement('div'); container.className = 'terminal-container';
+  const container = getOrCreateContainer(id);
   panel.appendChild(hdr); panel.appendChild(container);
   panel.addEventListener('mousedown', () => {
     setActive(id);
@@ -161,14 +254,105 @@ export function createTermPanel(id) {
   return panel;
 }
 
-export function fitAll() {
+function createAgentLaunchButton(agent, label, terminalId) {
+  const button = document.createElement('button');
+  button.className = `panel-action-btn agent-launch-btn agent-${agent}`;
+  button.dataset.agent = agent;
+  button.dataset.label = label;
+  button.textContent = label;
+
+  const preset = S.agentPresets?.[agent];
+  button.classList.toggle('is-empty', !preset?.command?.trim());
+  button.title = !preset?.command?.trim() ? `Configure ${label} preset` : `Launch ${label}`;
+
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    launchAgentPreset(agent, label, terminalId);
+  });
+
+  return button;
+}
+
+function launchAgentPreset(agent, label, terminalId) {
+  const terminal = S.terminals.get(terminalId);
+  const command = S.agentPresets?.[agent]?.command || '';
+  if (!command.trim()) {
+    showAgentPresetsDialog();
+    return;
+  }
+
+  // Pane is running a full-screen TUI (claude/codex/vim/…) — sending a command
+  // now would inject keystrokes into it. Server's TUI monitor keeps this flag
+  // fresh whether or not the TUI was launched via this button.
+  if (terminal?.inTui) {
+    showNotif(`Exit the running program before launching ${label}`, 'warning');
+    setTimeout(() => terminal?.xterm.focus(), 0);
+    return;
+  }
+
+  const workspace = activeWs();
+  const expanded = command.replace(/\{\{\s*(terminal_name|terminal_id|workspace_name|role|agent)\s*\}\}/g, (_, key) => {
+    switch (key) {
+      case 'terminal_name': return terminal?.name || '';
+      case 'terminal_id': return terminalId;
+      case 'workspace_name': return workspace?.name || '';
+      case 'role': return terminal?.role || '';
+      case 'agent': return agent;
+      default: return '';
+    }
+  });
+
+  if (!expanded.trim()) {
+    showAgentPresetsDialog();
+    return;
+  }
+
+  // Optimistically mark the pane as in-TUI so a second click in the same
+  // frame doesn't double-fire while the server's TUI poll is catching up.
+  // The server poll reconciles this within ~1.5s regardless.
+  if (terminal) terminal.inTui = true;
+  refreshAgentPresetButtons();
+
+  setActive(terminalId);
+  send('terminal:input', {
+    id: terminalId,
+    data: expanded.endsWith('\n') ? expanded : `${expanded}\n`,
+  });
+  setTimeout(() => terminal?.xterm.focus(), 0);
+  updateSidebar();
+  showNotif(`${label} launched in ${terminal?.name || terminalId}`, 'success');
+}
+
+let _fitAllScheduled = false;
+function _runFitAll() {
+  _fitAllScheduled = false;
   const ws = activeWs();
   if (!ws) return;
   for (const tid of ws.terminalIds) {
     const t = S.terminals.get(tid);
     if (!t) continue;
-    try { t.fitAddon.fit(); send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows }); } catch (e) {}
+    try {
+      const beforeCols = t.xterm.cols;
+      const beforeRows = t.xterm.rows;
+      t.fitAddon.fit();
+      // Only notify the server when geometry actually changed. Sending a
+      // redundant resize makes tmux re-emit a screen redraw, which during
+      // streaming output produces visible scroll jumps that snap back.
+      if (t.xterm.cols !== beforeCols || t.xterm.rows !== beforeRows) {
+        send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
+      }
+    } catch (e) {}
   }
+}
+
+// Coalesce rapid fitAll calls (ResizeObserver + window resize + split/browser
+// drag + renderLayout can all fire in the same frame). Calling xterm.resize()
+// in a tight loop reflows the scrollback while writes are still arriving,
+// which corrupts the buffer — paragraphs get broken and rows get dropped.
+export function fitAll() {
+  if (_fitAllScheduled) return;
+  _fitAllScheduled = true;
+  requestAnimationFrame(_runFitAll);
 }
 
 export function updatePanelStatus(id) {

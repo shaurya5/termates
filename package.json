@@ -19,7 +19,8 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:perf": "vitest run tests/perf"
+    "test:perf": "vitest run tests/perf",
+    "build:abduco": "./scripts/build-abduco.sh"
   },
   "build": {
     "appId": "com.termates.app",
@@ -55,7 +56,15 @@
       "node_modules/**/*",
       "package.json"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "binaries",
+        "to": "binaries",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "asar": false
   },
   "dependencies": {

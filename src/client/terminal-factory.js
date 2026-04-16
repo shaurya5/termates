@@ -5,7 +5,6 @@
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
-import { WebglAddon } from 'xterm-addon-webgl';
 import { send } from './transport.js';
 
 export const xtermTheme = {
@@ -30,8 +29,21 @@ export function createXterm(id) {
   const fitAddon = new FitAddon();
   xterm.loadAddon(fitAddon);
   xterm.loadAddon(new WebLinksAddon());
-  xterm._webglAddon = new WebglAddon();
-  xterm._webglAddon.onContextLoss(() => { xterm._webglAddon.dispose(); });
+
+  // Force a repaint on scroll. Without this, xterm intermittently leaves
+  // some rows unpainted when scrolling through deep scrollback (rows are in
+  // the buffer — you can select-drag to see them — but aren't drawn).
+  // Coalesce to one refresh per frame so we don't pile up work on programmatic
+  // scrolls during heavy streaming output.
+  let _scrollRefreshPending = false;
+  xterm.onScroll(() => {
+    if (_scrollRefreshPending) return;
+    _scrollRefreshPending = true;
+    requestAnimationFrame(() => {
+      _scrollRefreshPending = false;
+      try { xterm.refresh(0, xterm.rows - 1); } catch (e) {}
+    });
+  });
 
   // Mac keybindings — handle everything explicitly to avoid tmux conflicts
   if (isMac) {

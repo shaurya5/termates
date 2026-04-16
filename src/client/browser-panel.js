@@ -84,7 +84,9 @@ export function setupBrowserResize() {
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault(); handle.classList.add('dragging');
     const startX = e.clientX, startW = panel.offsetWidth;
-    const move = (e) => { panel.style.width = Math.max(300, Math.min(workspace.offsetWidth * 0.6, startW + (startX - e.clientX))) + 'px'; fitAll(); };
+    // No fitAll() during drag — reflowing xterm while bytes stream in
+     // corrupts scrollback. mouseup fits once.
+    const move = (e) => { panel.style.width = Math.max(300, Math.min(workspace.offsetWidth * 0.6, startW + (startX - e.clientX))) + 'px'; };
     const up = () => { handle.classList.remove('dragging'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = ''; document.body.style.userSelect = ''; S.browserWidth = panel.offsetWidth / workspace.offsetWidth; persistBrowser(); fitAll(); };
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';

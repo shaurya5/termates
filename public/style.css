@@ -106,12 +106,24 @@ html, body {
   -webkit-app-region: drag;
   padding: 38px 14px 10px 14px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .logo {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-header-actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .logo-icon {
@@ -381,40 +393,6 @@ html, body {
 
 .link-list-item:hover .unlink-btn { opacity: 1; }
 .link-list-item .unlink-btn:hover { color: var(--error); }
-
-.message-list {
-  padding-bottom: 6px;
-}
-
-.message-list-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-}
-
-.message-list-item:hover {
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.message-meta {
-  font-size: 9px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.message-body {
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
 
 /* Update Banner */
 .update-banner {
@@ -760,6 +738,12 @@ html, body {
   border: 1px solid var(--border);
 }
 
+.panel-header .panel-launchers {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .panel-header .panel-actions {
   display: flex;
   gap: 1px;
@@ -791,10 +775,57 @@ html, body {
   color: var(--error);
 }
 
+.panel-header .panel-action-btn.agent-launch-btn {
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  letter-spacing: 0.2px;
+  text-transform: none;
+}
+
+.panel-header .panel-action-btn.agent-launch-btn.agent-claude {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+}
+
+.panel-header .panel-action-btn.agent-launch-btn.agent-codex {
+  color: var(--purple);
+  border-color: rgba(167, 139, 250, 0.28);
+  background: var(--purple-dim);
+}
+
+.panel-header .panel-action-btn.agent-launch-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+}
+
+.panel-header .panel-action-btn.agent-launch-btn:disabled {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: transparent;
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.panel-header .panel-action-btn.agent-launch-btn:disabled:hover {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.panel-header .panel-action-btn.agent-launch-btn.is-empty {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: transparent;
+  opacity: 0.5;
+}
+
 .terminal-container {
   flex: 1;
   overflow: hidden;
-  padding: 2px;
+  /* No padding here — FitAddon measures clientHeight of this element, so any
+     padding makes it over-count rows by 1, which then renders clipped. If you
+     need visual breathing room, apply it to .terminal-panel instead. */
 }
 
 .terminal-container .xterm {
@@ -1211,20 +1242,19 @@ dialog::backdrop {
   line-height: 1.5;
 }
 
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: -4px;
+.dialog-help {
+  margin: -2px 0 2px;
   color: var(--text-secondary);
   font-size: 10px;
-  text-transform: none;
-  letter-spacing: 0.2px;
+  line-height: 1.6;
 }
 
-.checkbox-label input {
-  width: auto;
-  margin: 0;
+.dialog-help code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
 }
 
 .dialog-footer {
