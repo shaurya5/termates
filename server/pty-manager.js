@@ -26,7 +26,7 @@ const STRIP_ENV_PREFIXES = [
   'ZELLIJ_',
 ];
 
-export function buildTerminalEnv({ id, name, role, baseEnv = process.env }) {
+export function buildTerminalEnv({ id, name, baseEnv = process.env }) {
   const env = { ...baseEnv };
 
   for (const key of Object.keys(env)) {
@@ -42,9 +42,6 @@ export function buildTerminalEnv({ id, name, role, baseEnv = process.env }) {
   env.COLORTERM = 'truecolor';
   env.TERM_PROGRAM = 'Termates';
 
-  if (role) env.TERMATES_ROLE = role;
-  else delete env.TERMATES_ROLE;
-
   return env;
 }
 
@@ -58,9 +55,9 @@ export class PtyManager {
     // the no-op NoBackend.
     this.tmuxAvailable = this.backend.name !== 'none';
     const label = this.backend.name;
-    if (label === 'abduco') console.log('  [abduco] Persistent terminals enabled');
-    else if (label === 'tmux') console.log('  [tmux] Persistent terminals enabled (fallback; install abduco for better rendering)');
-    else console.log('  [persistence] No abduco/tmux found — terminals will not survive restart');
+    if (label === 'tmux') console.log('  [tmux] Persistent terminals enabled');
+    else if (label === 'abduco') console.log('  [abduco] Persistent terminals enabled (legacy fallback)');
+    else console.log('  [persistence] No tmux/abduco found — terminals will not survive restart');
   }
 
   get size() {
@@ -92,7 +89,7 @@ export class PtyManager {
   }
 
   // ---- Create a fresh terminal, persisted through the active backend ----
-  create({ id, name, shell, cwd, role, cols, rows, sshTarget }) {
+  create({ id, name, shell, cwd, cols, rows, sshTarget }) {
     const termId = id || `t${this.nextId++}`;
     const sessionName = this.tmuxAvailable ? this._sessionName(termId) : null;
 
@@ -103,7 +100,6 @@ export class PtyManager {
     const env = buildTerminalEnv({
       id: termId,
       name: name || `Terminal ${termId}`,
-      role,
     });
 
     // Recreate from scratch — if a stale session with this id exists (e.g.
@@ -134,13 +130,14 @@ export class PtyManager {
       env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(termId, name, role, ptyProcess, sessionName);
+    const terminal = this._makeTerminal(termId, name, ptyProcess, sessionName);
+    if (sessionName) this.backend.setSessionTuiMode(sessionName, false);
     this.terminals.set(termId, terminal);
     return terminal;
   }
 
   // ---- Reattach to a pre-existing session left behind by a prior run ----
-  reattach({ id, name, role, status, cols, rows }) {
+  reattach({ id, name, status, inTui, cols, rows }) {
     if (!this.tmuxAvailable) return null;
     const sessionName = this._sessionName(id);
     if (!this.backend.sessionExists(sessionName)) return null;
@@ -148,7 +145,6 @@ export class PtyManager {
     const env = buildTerminalEnv({
       id,
       name: name || `Terminal ${id}`,
-      role,
     });
 
     // Session is already known to exist (checked above), so buildSpawn skips
@@ -167,18 +163,20 @@ export class PtyManager {
       env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(id, name, role, ptyProcess, sessionName);
+    const terminal = this._makeTerminal(id, name, ptyProcess, sessionName);
     terminal.status = status || 'idle';
+    const liveInTui = this.backend.querySessionTuiMode(sessionName);
+    terminal.inTui = liveInTui === null ? !!inTui : liveInTui;
+    this.backend.setSessionTuiMode(sessionName, terminal.inTui);
     this.terminals.set(id, terminal);
     return terminal;
   }
 
   // ---- Create SSH terminal (convenience wrapper) ----
-  createSsh({ id, name, role, cols, rows, target }) {
+  createSsh({ id, name, cols, rows, target }) {
     return this.create({
       id,
       name: name || `SSH: ${target}`,
-      role: role || null,
       cols, rows,
       sshTarget: target,
     });
@@ -186,7 +184,7 @@ export class PtyManager {
 
   // ---- Create remote terminal (persisted locally via the active backend,
   //      then ssh into the remote host and run remote tmux there) ----
-  createRemote({ id, name, role, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
+  createRemote({ id, name, cols, rows, sshTarget, remoteCwd, remoteSessionName }) {
     const termId = id || `t${this.nextId++}`;
     const sessionName = this.tmuxAvailable ? this._sessionName(termId) : null;
     const termCols = cols || 80;
@@ -195,7 +193,6 @@ export class PtyManager {
     const env = buildTerminalEnv({
       id: termId,
       name: name || `Remote: ${sshTarget}`,
-      role,
     });
 
     const { sshArgs, remoteCmd } = buildRemoteTmuxCommand(sshTarget, remoteSessionName || `termates-${termId}`, remoteCwd);
@@ -227,7 +224,7 @@ export class PtyManager {
       env: spawnEnv,
     });
 
-    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, role, ptyProcess, sessionName);
+    const terminal = this._makeTerminal(termId, name || `Remote: ${sshTarget}`, ptyProcess, sessionName);
     terminal.remote = true;
     terminal.sshTarget = sshTarget;
     this.terminals.set(termId, terminal);
@@ -235,11 +232,10 @@ export class PtyManager {
   }
 
   // ---- Internal: build terminal object ----
-  _makeTerminal(id, name, role, ptyProcess, tmuxSession) {
+  _makeTerminal(id, name, ptyProcess, tmuxSession) {
     const terminal = {
       id,
       name: name || `Terminal ${id}`,
-      role: role || null,
       status: 'idle',
       inTui: false,
       tmuxSession: tmuxSession || null,
@@ -281,7 +277,10 @@ export class PtyManager {
       for (const m of data.matchAll(/\x1b\[\?(?:1049|1047|47)([hl])/g)) {
         if (m.index > lastIdx) { lastIdx = m.index; lastOn = m[1] === 'h'; }
       }
-      if (lastOn !== null) terminal.inTui = lastOn;
+      if (lastOn !== null && terminal.inTui !== lastOn) {
+        terminal.inTui = lastOn;
+        this.backend.setSessionTuiMode(terminal.tmuxSession, lastOn);
+      }
       for (const cb of terminal.listeners) {
         try { cb(data); } catch (e) { /* ignore */ }
       }
@@ -378,17 +377,12 @@ export class PtyManager {
     return false;
   }
 
-  setRole(id, role) {
-    const t = this.terminals.get(id);
-    if (t) { t.role = role || null; return true; }
-    return false;
-  }
-
   setInTui(id, value) {
     const t = this.terminals.get(id);
     if (!t) return null;
     const prev = t.inTui;
     t.inTui = !!value;
+    if (prev !== t.inTui) this.backend.setSessionTuiMode(t.tmuxSession, t.inTui);
     return { prev, current: t.inTui, changed: prev !== t.inTui };
   }
 
@@ -403,7 +397,15 @@ export class PtyManager {
   paneAlternateOn(id) {
     const t = this.terminals.get(id);
     if (!t) return Promise.resolve(null);
+    const live = this.backend.querySessionTuiMode(t.tmuxSession);
+    if (live !== null) return Promise.resolve(live);
     return Promise.resolve(!!t.inTui);
+  }
+
+  snapshot(id) {
+    const t = this.terminals.get(id);
+    if (!t?.tmuxSession) return null;
+    return this.backend.captureSessionSnapshot(t.tmuxSession);
   }
 
   // Destroy terminal AND its persisted session (abduco/tmux).
@@ -439,7 +441,6 @@ export class PtyManager {
     return Array.from(this.terminals.values()).map(t => ({
       id: t.id,
       name: t.name,
-      role: t.role,
       status: t.status,
       inTui: t.inTui,
       tmuxSession: t.tmuxSession,

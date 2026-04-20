@@ -122,7 +122,8 @@ export class StateManager {
   // --- Terminals ---
   setTerminals(terminals) {
     this.state.terminals = terminals.map(t => ({
-      id: t.id, name: t.name, role: t.role, status: t.status,
+      id: t.id, name: t.name, status: t.status,
+      inTui: !!t.inTui,
       tmuxSession: t.tmuxSession || null,
     }));
     this.save();

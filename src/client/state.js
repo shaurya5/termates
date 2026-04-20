@@ -57,7 +57,7 @@ export function persistWorkspaces() {
   });
 }
 
-export function persistAgentPresets() {
+export function persistSettings() {
   send('settings:update', {
     agentPresets: S.agentPresets,
   });

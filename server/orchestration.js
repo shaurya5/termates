@@ -155,8 +155,8 @@ export function restoreSession(stateManager, ptyManager, linkManager, subscribeO
       const terminal = ptyManager.reattach({
         id: savedTerm.id,
         name: savedTerm.name,
-        role: savedTerm.role,
         status: savedTerm.status,
+        inTui: savedTerm.inTui,
       });
       if (terminal) {
         subscribeOutputFn(terminal);

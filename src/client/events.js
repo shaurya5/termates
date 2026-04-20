@@ -6,7 +6,7 @@ import { S, activeWs, persistWorkspaces, normalizeAgentPresets } from './state.j
 import { createXterm } from './terminal-factory.js';
 import { send } from './transport.js';
 import { updateSidebar } from './sidebar.js';
-import { renderLayout, fitAll, addTerminalToLayout, updatePanelStatus, updateLinked, forgetContainer } from './layout/renderer.js';
+import { renderLayout, fitAll, addTerminalToLayout, updatePanelStatus, updateLinked, forgetContainer, applyTerminalSnapshot } from './layout/renderer.js';
 import { setActive } from './link-mode.js';
 import { toggleBrowser, renderBrowserTabs } from './browser-panel.js';
 import { showNotif } from './notifications.js';
@@ -24,16 +24,25 @@ export function handleMsg(msg) {
     case 'terminal:unlinked': onUnlinked(msg.payload); break;
     case 'terminal:status-changed': onStatusChanged(msg.payload); break;
     case 'terminal:tui-state': onTuiState(msg.payload); break;
+    case 'terminal:snapshot': onSnapshot(msg.payload); break;
     case 'terminal:notification': onNotif(msg.payload); break;
     case 'settings:updated': onSettingsUpdated(msg.payload); break;
     case 'terminal:list': onList(msg.payload); break;
   }
 }
 
-export function onCreated({ id, name, role, status, inTui }) {
+export function onCreated({ id, name, status, inTui, tmuxSession }) {
   if (S.terminals.has(id)) return;
   const { xterm, fitAddon } = createXterm(id);
-  const terminal = { id, name, role, status: status || 'idle', inTui: !!inTui, xterm, fitAddon };
+  const terminal = {
+    id,
+    name,
+    status: status || 'idle',
+    inTui: !!inTui,
+    tmuxSession: tmuxSession || null,
+    xterm,
+    fitAddon,
+  };
   S.terminals.set(id, terminal);
   // Add to active workspace
   const ws = activeWs();
@@ -65,6 +74,16 @@ export function onOutput({ id, data }) {
 export function destroyTerminalLocally(id) {
   const t = S.terminals.get(id);
   if (t) {
+    try {
+      if (t._mountFrame !== null && t._mountFrame !== undefined) cancelAnimationFrame(t._mountFrame);
+    } catch (e) {}
+    try {
+      if (t._snapshotTimer) clearTimeout(t._snapshotTimer);
+    } catch (e) {}
+    t._mountFrame = null;
+    t._snapshotTimer = null;
+    t._snapshotResolver = null;
+    t._opening = false;
     try { t._resizeObserver?.disconnect(); } catch (e) {}
     try { t.xterm.dispose(); } catch (e) { /* WebGL context may already be lost */ }
     S.terminals.delete(id);
@@ -84,29 +103,16 @@ export function onDestroyed({ id }) {
   destroyTerminalLocally(id);
 }
 
-export function onConfigured({ id, name, role }) {
+export function onConfigured({ id, name }) {
   const t = S.terminals.get(id);
   if (!t) return;
   if (name !== undefined) t.name = name;
-  if (role !== undefined) t.role = role;
   // Surgical DOM update — rebuilding the whole layout on a rename was tearing
   // down every xterm in every pane, which is what produced the global flicker.
   const panel = document.querySelector(`[data-tid="${id}"]`);
   if (panel) {
     const nm = panel.querySelector('.panel-name');
     if (nm && name !== undefined) nm.textContent = t.name;
-    if (role !== undefined) {
-      const oldBadge = panel.querySelector('.panel-role');
-      if (oldBadge) oldBadge.remove();
-      if (t.role) {
-        const hdr = panel.querySelector('.panel-header');
-        const launchers = panel.querySelector('.panel-launchers');
-        const badge = document.createElement('span');
-        badge.className = `panel-role terminal-role-badge ${t.role}`;
-        badge.textContent = t.role;
-        if (hdr && launchers) hdr.insertBefore(badge, launchers);
-      }
-    }
   }
   updateSidebar();
 }
@@ -141,13 +147,17 @@ export function onTuiState({ id, inTui }) {
   refreshAgentPresetButtons();
 }
 
+export function onSnapshot({ id, data }) {
+  applyTerminalSnapshot(id, data);
+}
+
 export function onNotif({ id, status, text }) {
   const t = S.terminals.get(id);
   if (t) { t.status = status; updateSidebar(); updatePanelStatus(id); showNotif(`${t.name}: ${text || status}`, status); }
 }
 
 export function onSettingsUpdated({ agentPresets }) {
-  S.agentPresets = normalizeAgentPresets(agentPresets);
+  if (agentPresets !== undefined) S.agentPresets = normalizeAgentPresets(agentPresets);
   refreshAgentPresetButtons();
 }
 
@@ -172,9 +182,10 @@ export function onList({ terminals, workspaces, activeWorkspaceId, nextWorkspace
     for (const t of terminals) {
       const { xterm, fitAddon } = createXterm(t.id);
       const terminal = {
-        id: t.id, name: t.name, role: t.role,
+        id: t.id, name: t.name,
         status: t.status || 'idle',
         inTui: !!t.inTui,
+        tmuxSession: t.tmuxSession || null,
         xterm, fitAddon,
       };
       S.terminals.set(t.id, terminal);

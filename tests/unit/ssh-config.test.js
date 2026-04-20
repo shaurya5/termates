@@ -389,6 +389,11 @@ describe('buildRemoteTmuxCommand()', () => {
     expect(remoteCmd).toContain('set mouse off');
   });
 
+  it('remoteCmd enables focus-events for full-screen TUIs', () => {
+    const { remoteCmd } = buildRemoteTmuxCommand('user@host', 'termates-t1');
+    expect(remoteCmd).toContain('set focus-events on');
+  });
+
   it('remoteCmd includes status off config', () => {
     const { remoteCmd } = buildRemoteTmuxCommand('user@host', 'termates-t1');
     expect(remoteCmd).toContain('set status off');

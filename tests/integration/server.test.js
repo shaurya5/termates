@@ -149,6 +149,22 @@ function sendUnixCommand(command, timeoutMs = 8000) {
   });
 }
 
+async function waitForTerminalOutput(ws, id, matcher = () => true, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let combined = '';
+
+  while (Date.now() < deadline) {
+    const msg = await ws.next(
+      m => m.type === 'terminal:output' && m.payload.id === id,
+      Math.max(1, deadline - Date.now()),
+    );
+    combined += msg.payload.data;
+    if (matcher(combined, msg.payload.data)) return { msg, combined };
+  }
+
+  throw new Error(`Timed out waiting for terminal output from ${id}`);
+}
+
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
 
 let serverProcess;
@@ -212,29 +228,33 @@ describe('WebSocket', () => {
     }
   });
 
-  it('settings:update persists agent presets and broadcasts settings:updated', async () => {
+  it('settings:update persists presets and broadcasts settings:updated', async () => {
     const ws = await openWs();
-    let original;
+    let originalAgentPresets;
     try {
       ws.send('terminal:list');
       const initial = await ws.next(m => m.type === 'terminal:list');
-      original = initial.payload.agentPresets;
+      originalAgentPresets = initial.payload.agentPresets;
 
-      const nextPresets = {
+      const nextAgentPresets = {
         claude: { command: 'claude --print {{workspace_name}}' },
         codex: { command: 'codex --model gpt-5-codex' },
       };
 
-      ws.send('settings:update', { agentPresets: nextPresets });
+      ws.send('settings:update', {
+        agentPresets: nextAgentPresets,
+      });
       const updated = await ws.next(m => m.type === 'settings:updated');
-      expect(updated.payload.agentPresets).toEqual(nextPresets);
+      expect(updated.payload.agentPresets).toEqual(nextAgentPresets);
 
       ws.send('terminal:list');
       const listed = await ws.next(m => m.type === 'terminal:list');
-      expect(listed.payload.agentPresets).toEqual(nextPresets);
+      expect(listed.payload.agentPresets).toEqual(nextAgentPresets);
     } finally {
-      if (original) {
-        ws.send('settings:update', { agentPresets: original });
+      if (originalAgentPresets) {
+        ws.send('settings:update', {
+          agentPresets: originalAgentPresets,
+        });
         await ws.next(m => m.type === 'settings:updated').catch(() => {});
       }
       ws.close();
@@ -318,10 +338,9 @@ describe('WebSocket', () => {
       const created = await ws.next(m => m.type === 'terminal:created');
       const id = created.payload.id;
 
-      ws.send('terminal:configure', { id, name: 'Configured Name', role: 'coder' });
+      ws.send('terminal:configure', { id, name: 'Configured Name' });
       const msg = await ws.next(m => m.type === 'terminal:configured' && m.payload.id === id);
       expect(msg.payload.name).toBe('Configured Name');
-      expect(msg.payload.role).toBe('coder');
 
       ws.send('terminal:destroy', { id });
       await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
@@ -347,7 +366,10 @@ describe('WebSocket', () => {
 
       ws.send('terminal:list');
       const listed = await ws.next(m => m.type === 'terminal:list');
-      expect(listed.payload.workspaces[0].links).toEqual(
+      const activeWorkspace = listed.payload.workspaces.find(
+        (workspace) => workspace.id === listed.payload.activeWorkspaceId,
+      ) || listed.payload.workspaces[0];
+      expect(activeWorkspace.links).toEqual(
         expect.arrayContaining([{ from: idA, to: idB }]),
       );
 
@@ -446,24 +468,22 @@ describe('WebSocket (state verification)', () => {
     }
   });
 
-  it('terminal:configure updates both name and role', async () => {
+  it('terminal:configure updates the name in memory and in the broadcast', async () => {
     const ws = await openWs();
     try {
       ws.send('terminal:create', { name: 'Config Test' });
       const created = await ws.next(m => m.type === 'terminal:created');
       const id = created.payload.id;
 
-      ws.send('terminal:configure', { id, name: 'New Name', role: 'reviewer' });
+      ws.send('terminal:configure', { id, name: 'New Name' });
       const msg = await ws.next(m => m.type === 'terminal:configured' && m.payload.id === id);
       expect(msg.payload.name).toBe('New Name');
-      expect(msg.payload.role).toBe('reviewer');
 
       // Verify via list
       ws.send('terminal:list');
       const list = await ws.next(m => m.type === 'terminal:list');
       const term = list.payload.terminals.find(t => t.id === id);
       expect(term.name).toBe('New Name');
-      expect(term.role).toBe('reviewer');
 
       ws.send('terminal:destroy', { id });
       await ws.next(m => m.type === 'terminal:destroyed' && m.payload.id === id);
@@ -564,8 +584,17 @@ describe('WebSocket (state verification)', () => {
       const created = await ws.next(m => m.type === 'terminal:created');
       const id = created.payload.id;
 
-      // Let the shell produce some prompt output into the server-side buffer.
-      await new Promise(r => setTimeout(r, 1000));
+      // Wait for the initial shell prompt so the command below is typed into a
+      // live shell rather than racing the terminal bootstrap.
+      await waitForTerminalOutput(ws, id, (combined) => combined.length > 0, 5000);
+
+      // Seed the server-side terminal buffer with output that happened before
+      // the second client connects. That exact marker must not be replayed by
+      // terminal:list, even though live redraw/prompt output may still arrive.
+      const marker = `__buffer_test_${Date.now().toString(36)}__`;
+      ws.send('terminal:input', { id, data: `printf '${marker}\\n'\r` });
+      await waitForTerminalOutput(ws, id, (combined) => combined.includes(marker), 5000);
+      await new Promise(r => setTimeout(r, 300));
 
       // A fresh connection gets the list but must NOT receive a historical
       // byte dump — the client relies on tmux's attach redraw at the correct
@@ -575,12 +604,12 @@ describe('WebSocket (state verification)', () => {
         ws2.send('terminal:list');
         await ws2.next(m => m.type === 'terminal:list');
 
-        let gotOutput = false;
+        let replayedMarker = false;
         try {
-          await ws2.next(m => m.type === 'terminal:output' && m.payload.id === id, 500);
-          gotOutput = true;
+          await waitForTerminalOutput(ws2, id, (combined) => combined.includes(marker), 500);
+          replayedMarker = true;
         } catch (e) { /* expected: timeout */ }
-        expect(gotOutput).toBe(false);
+        expect(replayedMarker).toBe(false);
       } finally {
         ws2.close();
       }
@@ -592,19 +621,6 @@ describe('WebSocket (state verification)', () => {
     }
   });
 
-  it('terminal:create with role returns role in created event', async () => {
-    const ws = await openWs();
-    try {
-      ws.send('terminal:create', { name: 'Role Test', role: 'coder' });
-      const msg = await ws.next(m => m.type === 'terminal:created');
-      expect(msg.payload.role).toBe('coder');
-
-      ws.send('terminal:destroy', { id: msg.payload.id });
-      await ws.next(m => m.type === 'terminal:destroyed');
-    } finally {
-      ws.close();
-    }
-  });
 });
 
 // ─── HTTP extended tests ─────────────────────────────────────────────────────

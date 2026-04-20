@@ -318,26 +318,6 @@ html, body {
   color: var(--text-primary);
 }
 
-/* Role Badges */
-.terminal-role-badge {
-  font-size: 9px;
-  font-weight: 500;
-  padding: 1px 5px;
-  background: var(--bg-primary);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-}
-
-.terminal-role-badge.lead { color: var(--warning); border-color: rgba(234, 179, 8, 0.3); }
-.terminal-role-badge.coder { color: var(--accent); border-color: var(--accent-border); }
-.terminal-role-badge.reviewer { color: var(--purple); border-color: rgba(167, 139, 250, 0.3); }
-.terminal-role-badge.tester { color: var(--success); border-color: rgba(34, 197, 94, 0.3); }
-.terminal-role-badge.researcher { color: var(--cyan); border-color: rgba(34, 211, 238, 0.3); }
-.terminal-role-badge.devops { color: var(--error); border-color: rgba(239, 68, 68, 0.3); }
-
 .link-indicator {
   width: 5px;
   height: 5px;
@@ -725,17 +705,6 @@ html, body {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 400;
-}
-
-.panel-header .panel-role {
-  font-size: 9px;
-  font-weight: 500;
-  padding: 1px 5px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  background: var(--bg-primary);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
 }
 
 .panel-header .panel-launchers {
@@ -1255,6 +1224,70 @@ dialog::backdrop {
   background: var(--bg-secondary);
   padding: 1px 4px;
   border: 1px solid var(--border);
+}
+
+.dialog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog-section + .dialog-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.dialog-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preset-row {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preset-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preset-row-title {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preset-grid .preset-command-field {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .preset-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .dialog-footer {

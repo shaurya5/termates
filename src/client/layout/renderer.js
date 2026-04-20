@@ -5,7 +5,7 @@
 import { S, activeWs, persistWorkspaces, nextTermName } from '../state.js';
 import { send } from '../transport.js';
 import { setActive, isLinked, handleLinkClick } from '../link-mode.js';
-import { showAgentPresetsDialog, showEditDialog, refreshAgentPresetButtons } from '../dialogs.js';
+import { showPresetsDialog, showEditDialog, refreshAgentPresetButtons } from '../dialogs.js';
 import { updateSidebar } from '../sidebar.js';
 import { splitInTree, buildBalancedLayout } from '../../../shared/layout-tree.js';
 import { destroyTerminalLocally } from '../events.js';
@@ -32,35 +32,23 @@ function getOrCreateContainer(id) {
   return c;
 }
 
-// Open xterm once the container has real pixel dimensions, then: fit, restore
-// scrollback (shell only — never for a TUI), flush queued writes, and finally
-// flip `_opened` so new writes bypass the queue. Order matters: if we set
-// `_opened` earlier, live bytes arriving via onOutput would race the queue
-// flush and desync the cursor.
-function mountWhenSized(t, c, tid, attempt = 0) {
-  const hasSize = c.clientWidth > 0 && c.clientHeight > 0;
-  if (!hasSize && attempt < 30) {
-    // ~500ms total retry budget; still opens after that, but we attach a
-    // ResizeObserver below so a later layout fires a fit when the container
-    // finally gets real dimensions (e.g. workspace switched in).
-    requestAnimationFrame(() => mountWhenSized(t, c, tid, attempt + 1));
-    return;
+export function normalizeMountedContainer(t, c) {
+  const mounted = t?.xterm?.element;
+  if (!mounted || !c) return;
+  if (c.childElementCount === 1 && c.firstElementChild === mounted) return;
+  try { c.replaceChildren(mounted); } catch (e) {}
+}
+
+function clearSnapshotWait(t) {
+  if (!t) return;
+  if (t._snapshotTimer) {
+    try { clearTimeout(t._snapshotTimer); } catch (e) {}
   }
-  t.xterm.open(c);
-  try {
-    t.fitAddon.fit();
-    send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
-  } catch (e) {}
-  // No scrollback restore. Writing a serialized snapshot into a fresh xterm
-  // while the live PTY stream is still going was producing overlap/cursor
-  // desync in both shell and TUI panes — saved bytes and live bytes would
-  // land on conflicting rows. If we want scrollback across reloads back as a
-  // feature, it needs a different design (e.g. server-side byte log replayed
-  // at the right size with the live stream paused). Reload now shows only
-  // current-screen state from the SIGWINCH + Ctrl+L nudge; for deeper
-  // history, Claude Code has its own in-UI scrolling (Ctrl+O to expand).
-  // Drain the queue exactly once. onOutput is still gated on `_opened` so new
-  // bytes keep landing in _pendingWrites while we drain.
+  t._snapshotTimer = null;
+  t._snapshotResolver = null;
+}
+
+function drainQueuedWrites(t) {
   const queue = t._pendingWrites;
   t._pendingWrites = null;
   if (queue?.length) {
@@ -68,8 +56,6 @@ function mountWhenSized(t, c, tid, attempt = 0) {
       try { t.xterm.write(chunk); } catch (e) {}
     }
   }
-  // Any bytes that arrived while we were draining went into a freshly-
-  // allocated queue. Move them across now.
   const lateQueue = t._pendingWrites;
   t._pendingWrites = null;
   if (lateQueue?.length) {
@@ -77,25 +63,117 @@ function mountWhenSized(t, c, tid, attempt = 0) {
       try { t.xterm.write(chunk); } catch (e) {}
     }
   }
-  // Now live writes can go straight through.
-  t._opened = true;
-  try { t.xterm.refresh(0, t.xterm.rows - 1); } catch (e) {}
+}
 
-  // Watch this specific container for size changes — catches the case where
-  // we opened with zero/wrong dimensions (workspace hidden, parent not yet
-  // laid out) and the real size lands later. A size change here triggers a
-  // fit, which propagates to the server via fitAll's resize-on-change.
-  try {
-    const ro = new ResizeObserver(() => {
-      try { fitAll(); } catch (e) {}
-    });
-    ro.observe(c);
-    t._resizeObserver = ro;
-  } catch (e) {}
+function finishMount(t, c, tid, { requestRefresh = false, snapshotData = null } = {}) {
+  if (!t || S.terminals.get(tid) !== t || t._opened) {
+    clearSnapshotWait(t);
+    return;
+  }
+  clearSnapshotWait(t);
 
-  // Ask the server to nudge the PTY so the inner TUI/shell re-emits its
-  // current screen if it wasn't otherwise going to write.
-  send('terminal:refresh', { id: tid });
+  const complete = () => {
+    drainQueuedWrites(t);
+    t._opened = true;
+    t._opening = false;
+    t._mountFrame = null;
+    try { t.xterm.refresh(0, t.xterm.rows - 1); } catch (e) {}
+
+    try {
+      const ro = new ResizeObserver(() => {
+        try { fitAll(); } catch (e) {}
+      });
+      ro.observe(c);
+      t._resizeObserver = ro;
+    } catch (e) {}
+
+    if (requestRefresh) send('terminal:refresh', { id: tid });
+  };
+
+  if (snapshotData) {
+    try { t.xterm.reset?.(); } catch (e) {}
+    try {
+      t.xterm.write(snapshotData, complete);
+      return;
+    } catch (e) {}
+  }
+
+  complete();
+}
+
+export function applyTerminalSnapshot(id, data) {
+  const t = S.terminals.get(id);
+  if (!t || typeof t._snapshotResolver !== 'function') return;
+  t._snapshotResolver(data);
+}
+
+// Open xterm once the container has real pixel dimensions, then: fit, restore
+// scrollback (shell only — never for a TUI), flush queued writes, and finally
+// flip `_opened` so new writes bypass the queue. Order matters: if we set
+// `_opened` earlier, live bytes arriving via onOutput would race the queue
+// flush and desync the cursor.
+export function mountWhenSized(t, c, tid, attempt = 0) {
+  if (!t || !c || S.terminals.get(tid) !== t || t._opened || t._opening) return;
+  t._opening = true;
+
+  const tryMount = (nextAttempt) => {
+    if (S.terminals.get(tid) !== t) {
+      t._opening = false;
+      t._mountFrame = null;
+      return;
+    }
+    if (t._opened) {
+      t._opening = false;
+      t._mountFrame = null;
+      return;
+    }
+
+    const connected = c.isConnected !== false;
+    const hasSize = connected && c.clientWidth > 0 && c.clientHeight > 0;
+    if (!hasSize && nextAttempt < 30) {
+      // ~500ms total retry budget. Keep exactly one retry chain alive per
+      // terminal; xterm.open() is not idempotent and duplicate opens leave
+      // stale renderer layers stacked in the same pane.
+      t._mountFrame = requestAnimationFrame(() => tryMount(nextAttempt + 1));
+      return;
+    }
+
+    if (!connected) {
+      // Workspace/layout switched away before the pane ever attached. Leave
+      // it unopened so the next renderLayout retry can mount it cleanly.
+      t._opening = false;
+      t._mountFrame = null;
+      return;
+    }
+
+    if (t.xterm.element) normalizeMountedContainer(t, c);
+    else {
+      try { c.replaceChildren(); } catch (e) {}
+      t.xterm.open(c);
+    }
+
+    try {
+      t.fitAddon.fit();
+      send('terminal:resize', { id: tid, cols: t.xterm.cols, rows: t.xterm.rows });
+    } catch (e) {}
+    if (t.tmuxSession) {
+      t._snapshotResolver = (data) => finishMount(t, c, tid, {
+        snapshotData: data ?? null,
+        requestRefresh: data == null,
+      });
+      t._snapshotTimer = setTimeout(() => {
+        if (typeof t._snapshotResolver === 'function') {
+          t._snapshotResolver(null);
+        }
+      }, 200);
+      send('terminal:snapshot', { id: tid });
+      return;
+    }
+
+    finishMount(t, c, tid, { requestRefresh: true });
+  };
+
+  tryMount(attempt);
 }
 
 // ============================================
@@ -224,7 +302,6 @@ export function createTermPanel(id) {
   const dot = document.createElement('span'); dot.className = `panel-dot terminal-status-dot ${t.status}`;
   const nm = document.createElement('span'); nm.className = 'panel-name'; nm.textContent = t.name;
   hdr.appendChild(dot); hdr.appendChild(nm);
-  if (t.role) { const b = document.createElement('span'); b.className = `panel-role terminal-role-badge ${t.role}`; b.textContent = t.role; hdr.appendChild(b); }
 
   const launchers = document.createElement('div');
   launchers.className = 'panel-launchers';
@@ -246,6 +323,7 @@ export function createTermPanel(id) {
   hdr.appendChild(acts);
 
   const container = getOrCreateContainer(id);
+  normalizeMountedContainer(t, container);
   panel.appendChild(hdr); panel.appendChild(container);
   panel.addEventListener('mousedown', () => {
     setActive(id);
@@ -263,7 +341,7 @@ function createAgentLaunchButton(agent, label, terminalId) {
 
   const preset = S.agentPresets?.[agent];
   button.classList.toggle('is-empty', !preset?.command?.trim());
-  button.title = !preset?.command?.trim() ? `Configure ${label} preset` : `Launch ${label}`;
+  button.title = !preset?.command?.trim() ? `Configure ${label} launcher command` : `Launch ${label}`;
 
   button.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -277,7 +355,7 @@ function launchAgentPreset(agent, label, terminalId) {
   const terminal = S.terminals.get(terminalId);
   const command = S.agentPresets?.[agent]?.command || '';
   if (!command.trim()) {
-    showAgentPresetsDialog();
+    showPresetsDialog();
     return;
   }
 
@@ -291,19 +369,18 @@ function launchAgentPreset(agent, label, terminalId) {
   }
 
   const workspace = activeWs();
-  const expanded = command.replace(/\{\{\s*(terminal_name|terminal_id|workspace_name|role|agent)\s*\}\}/g, (_, key) => {
+  const expanded = command.replace(/\{\{\s*(terminal_name|terminal_id|workspace_name|agent)\s*\}\}/g, (_, key) => {
     switch (key) {
       case 'terminal_name': return terminal?.name || '';
       case 'terminal_id': return terminalId;
       case 'workspace_name': return workspace?.name || '';
-      case 'role': return terminal?.role || '';
       case 'agent': return agent;
       default: return '';
     }
   });
 
   if (!expanded.trim()) {
-    showAgentPresetsDialog();
+    showPresetsDialog();
     return;
   }
 

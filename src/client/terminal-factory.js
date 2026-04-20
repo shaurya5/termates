@@ -5,7 +5,10 @@
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebLinksAddon } from 'xterm-addon-web-links';
+import { S } from './state.js';
 import { send } from './transport.js';
+
+export const xtermFontFamily = "'SF Mono','Menlo','Monaco','Cascadia Mono','Cascadia Code','Consolas','Liberation Mono',monospace";
 
 export const xtermTheme = {
   background: '#09090b', foreground: '#fafafa', cursor: '#2dd4bf', cursorAccent: '#09090b',
@@ -16,19 +19,75 @@ export const xtermTheme = {
   brightBlue: '#93c5fd', brightMagenta: '#d8b4fe', brightCyan: '#67e8f9', brightWhite: '#ffffff',
 };
 
+function installWheelGuard(xterm, id) {
+  let wheelTarget = null;
+
+  const onWheel = (ev) => {
+    if (!ev || ev.defaultPrevented || !Number.isFinite(ev.deltaY) || ev.deltaY === 0) return;
+    const terminal = S.terminals.get(id);
+    const inTui = !!terminal?.inTui;
+    const hasScrollback = Number(xterm?.buffer?.active?.baseY || 0) > 0;
+
+    // xterm turns wheel into Up/Down keypresses when there is no local
+    // scrollback. That's useful for true full-screen TUIs, but in normal shell
+    // panes it makes the wheel walk readline history instead of doing nothing.
+    if (!inTui && !hasScrollback) {
+      try { ev.preventDefault(); } catch (e) {}
+      try { ev.stopImmediatePropagation?.(); } catch (e) {}
+      try { ev.stopPropagation?.(); } catch (e) {}
+    }
+  };
+
+  const attach = () => {
+    const el = xterm.element;
+    if (!el || el === wheelTarget) return;
+    if (wheelTarget) {
+      try { wheelTarget.removeEventListener('wheel', onWheel, true); } catch (e) {}
+    }
+    el.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    wheelTarget = el;
+  };
+
+  const detach = () => {
+    if (!wheelTarget) return;
+    try { wheelTarget.removeEventListener('wheel', onWheel, true); } catch (e) {}
+    wheelTarget = null;
+  };
+
+  const originalOpen = xterm.open.bind(xterm);
+  xterm.open = (...args) => {
+    const result = originalOpen(...args);
+    attach();
+    return result;
+  };
+
+  const originalDispose = xterm.dispose?.bind(xterm);
+  if (originalDispose) {
+    xterm.dispose = (...args) => {
+      detach();
+      return originalDispose(...args);
+    };
+  }
+}
+
 export function createXterm(id) {
-  const isMac = navigator.platform?.includes('Mac') || navigator.userAgent?.includes('Mac');
+  const nav = globalThis.navigator;
+  const isMac = !!(nav?.platform?.includes('Mac') || nav?.userAgent?.includes('Mac'));
   const xterm = new Terminal({
-    fontFamily: "'JetBrains Mono','SF Mono','Menlo','Cascadia Code','Consolas',monospace",
+    // Prefer local system monospace fonts here. Web fonts can look nicer in
+    // static UI, but xterm's renderer is far less reliable with glyph fallback,
+    // which shows up immediately in Claude/Codex block and box drawing.
+    fontFamily: xtermFontFamily,
     fontSize: 13, lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar',
     scrollback: 10000,
-    theme: xtermTheme, allowProposedApi: true,
+    theme: xtermTheme, allowProposedApi: true, customGlyphs: true,
     macOptionIsMeta: false,
     macOptionClickForcesSelection: true,
   });
   const fitAddon = new FitAddon();
   xterm.loadAddon(fitAddon);
   xterm.loadAddon(new WebLinksAddon());
+  installWheelGuard(xterm, id);
 
   // Force a repaint on scroll. Without this, xterm intermittently leaves
   // some rows unpainted when scrolling through deep scrollback (rows are in

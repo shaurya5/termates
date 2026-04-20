@@ -1,6 +1,6 @@
 {
   "name": "termates",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Desktop terminal multiplexer with persistent sessions, workspaces, and agent linking",
   "type": "module",
   "main": "electron/main.cjs",

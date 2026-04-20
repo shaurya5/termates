@@ -19,7 +19,7 @@
           <span class="logo-text">Termates</span>
         </div>
         <div class="sidebar-header-actions">
-          <button id="btn-agent-presets" class="icon-btn" title="Agent Presets">
+          <button id="btn-presets" class="icon-btn" title="Launcher Commands">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
         </div>
@@ -149,17 +149,7 @@
       <div class="dialog-header">New Terminal</div>
       <div class="dialog-body">
         <label for="create-name">Name:</label>
-        <input id="create-name" type="text" placeholder="e.g. Agent Coder">
-        <label for="create-role">Role (optional):</label>
-        <select id="create-role">
-          <option value="">None</option>
-          <option value="lead">Lead</option>
-          <option value="coder">Coder</option>
-          <option value="reviewer">Reviewer</option>
-          <option value="tester">Tester</option>
-          <option value="researcher">Researcher</option>
-          <option value="devops">DevOps</option>
-        </select>
+        <input id="create-name" type="text" placeholder="e.g. Backend Tests">
         <label for="create-cwd">Working Directory:</label>
         <div style="display:flex;gap:6px">
           <input id="create-cwd" type="text" placeholder="Leave empty for home directory" style="flex:1">
@@ -212,16 +202,6 @@
         <input id="edit-id" type="hidden">
         <label for="edit-name">Name:</label>
         <input id="edit-name" type="text" placeholder="Terminal name">
-        <label for="edit-role">Role:</label>
-        <select id="edit-role">
-          <option value="">None</option>
-          <option value="lead">Lead</option>
-          <option value="coder">Coder</option>
-          <option value="reviewer">Reviewer</option>
-          <option value="tester">Tester</option>
-          <option value="researcher">Researcher</option>
-          <option value="devops">DevOps</option>
-        </select>
         <label for="edit-status">Status:</label>
         <select id="edit-status">
           <option value="idle">Idle</option>
@@ -239,23 +219,26 @@
       </div>
     </dialog>
 
-    <dialog id="agent-presets-dialog">
-      <div class="dialog-header">Agent Presets</div>
+    <dialog id="presets-dialog">
+      <div class="dialog-header">Launcher Commands</div>
       <div class="dialog-body">
-        <p class="dialog-help">
-          These commands run inside the selected terminal shell when you click a provider button.
-          Supports <code>{{terminal_name}}</code>, <code>{{terminal_id}}</code>, <code>{{workspace_name}}</code>, <code>{{role}}</code>, and <code>{{agent}}</code>.
-        </p>
+        <div class="dialog-section">
+          <div class="dialog-section-title">Launcher Commands</div>
+          <p class="dialog-help">
+            These commands run inside the selected terminal shell when you click a provider button.
+            Supports <code>{{terminal_name}}</code>, <code>{{terminal_id}}</code>, <code>{{workspace_name}}</code>, and <code>{{agent}}</code>.
+          </p>
         <label for="agent-claude-command">Claude Command:</label>
         <textarea id="agent-claude-command" rows="3" placeholder="claude"></textarea>
         <label for="agent-codex-command">Codex Command:</label>
         <textarea id="agent-codex-command" rows="3" placeholder="codex"></textarea>
+        </div>
       </div>
       <div class="dialog-footer">
-        <button id="agent-presets-reset" class="btn btn-secondary">Reset Defaults</button>
+        <button id="presets-reset" class="btn btn-secondary">Restore Defaults</button>
         <div style="flex:1"></div>
-        <button id="agent-presets-cancel" class="btn btn-secondary">Cancel</button>
-        <button id="agent-presets-save" class="btn btn-primary">Save Presets</button>
+        <button id="presets-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="presets-save" class="btn btn-primary">Save</button>
       </div>
     </dialog>
   </div>

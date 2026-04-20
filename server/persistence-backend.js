@@ -1,38 +1,44 @@
 // ============================================
 // Persistence backends for terminal sessions.
 //
-// Termates keeps PTYs alive across server restarts. We used to use tmux for
-// this, but tmux's single-process event loop coalesces redraws under heavy
-// parallel output (multiple agents streaming at once), which shows up as the
-// "dots", partial renders, and scroll glitches. Tmux is also a full terminal
-// multiplexer — we don't use any of that; we only need persist/attach.
+// Termates keeps PTYs alive across server restarts. We prefer tmux because it
+// is actively maintained, already required for remote SSH persistence, and
+// widely available on the platforms we support.
 //
-// Abduco does exactly the persist/attach half and nothing else: no screen
-// state tracking, no redraw coalescing, no multiplexing. Bytes pass straight
-// through from the inner process to the attached PTY. Each session is its own
-// process — no shared event loop to contend on.
+// Abduco remains as a legacy fallback for installs where tmux is unavailable.
+// It is still a valid persist/attach backend, but no longer the default path.
 //
-// Order of preference: abduco > tmux > none.
+// Order of preference: tmux > abduco > none.
 // ============================================
 
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { execSync, execFileSync } from 'child_process';
+import { fileURLToPath } from 'url';
 
 const STATE_DIR = path.join(os.homedir(), '.termates');
 const TMUX_CONF = path.join(STATE_DIR, 'tmux.conf');
 const TMUX_SOCKET = path.join(STATE_DIR, 'tmux.sock');
 const ABDUCO_DIR = path.join(STATE_DIR, 'abduco');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TMUX_CONTROL_CLIENT = path.join(__dirname, 'tmux-control-client.js');
+const ABDUCO_DEBUG_MARKERS = [
+  'client-send:',
+  'client-recv:',
+  'client-stdin:',
+  'read_all(%d)',
+  'write_all(%d)',
+];
 
-// See pty-manager.js for the rationale on smcup@/rmcup@.
 const TMUX_CONF_CONTENT = `
 set -g status off
 set -g mouse off
+set -g focus-events on
 set -g escape-time 0
 set -g history-limit 50000
-set -g default-terminal "xterm-256color"
-set -ga terminal-overrides ",xterm-256color:Tc:smcup@:rmcup@"
+set -g default-terminal "tmux-256color"
+set -g terminal-overrides "xterm-256color:Tc:smcup@:rmcup@"
 set -g allow-passthrough on
 `.trim();
 
@@ -40,37 +46,68 @@ export { TMUX_CONF_CONTENT };
 
 // ---- Binary resolution ----
 //
-// Prefer a binary bundled with the Electron app over whatever's on $PATH, so
-// the app "just works" without requiring the user to `brew install abduco`.
-// At build time electron-builder copies `binaries/` into `process.resourcesPath`.
-// During dev (no Electron), the source-tree `binaries/` dir is checked.
-function bundledBinary(name) {
+// Prefer a bundled binary over whatever's on $PATH when a backend ships with
+// the app. At build time electron-builder copies `binaries/` into
+// `process.resourcesPath`. During dev (no Electron), prefer an installed
+// Termates.app resource copy when present, then fall back to the source-tree
+// `binaries/` dir.
+function bundledBinaryCandidates(name) {
   const arch = process.arch; // 'x64' | 'arm64'
   const platform = process.platform; // 'darwin' | 'linux'
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, 'binaries', `${name}-${platform}-${arch}`));
   }
+  if (platform === 'darwin') {
+    candidates.push(path.join('/Applications', 'Termates.app', 'Contents', 'Resources', 'binaries', `${name}-${platform}-${arch}`));
+  }
   // Dev/source tree
   candidates.push(path.join(process.cwd(), 'binaries', `${name}-${platform}-${arch}`));
-  for (const p of candidates) {
-    try { if (fs.existsSync(p) && fs.statSync(p).mode & 0o111) return p; } catch (e) {}
+  return candidates.filter((candidate) => {
+    try { return fs.existsSync(candidate) && (fs.statSync(candidate).mode & 0o111); }
+    catch (e) { return false; }
+  });
+}
+
+function binaryOnPath(name) {
+  try {
+    const resolved = execSync(`command -v ${name}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    return resolved || null;
+  } catch (e) { return null; }
+}
+
+function resolveBinary(name, validator = () => true) {
+  const candidates = [...bundledBinaryCandidates(name)];
+  const pathBinary = binaryOnPath(name);
+  if (pathBinary && !candidates.includes(pathBinary)) candidates.push(pathBinary);
+
+  for (const candidate of candidates) {
+    if (validator(candidate)) return candidate;
   }
   return null;
-}
-
-function onPath(name) {
-  try { execSync(`command -v ${name}`, { stdio: 'pipe' }); return name; }
-  catch (e) { return null; }
-}
-
-function resolveBinary(name) {
-  return bundledBinary(name) || onPath(name);
 }
 
 // ---- Common helpers ----
 function mkdirp(dir) {
   try { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+}
+
+function shellEscape(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildControlClientEnv(baseEnv) {
+  if (!process.versions?.electron) return baseEnv;
+  return { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' };
+}
+
+export function isNoisyAbducoBinary(binaryPath) {
+  try {
+    const buf = fs.readFileSync(binaryPath);
+    return ABDUCO_DEBUG_MARKERS.every((marker) => buf.includes(Buffer.from(marker)));
+  } catch (e) {
+    return false;
+  }
 }
 
 // ============================================
@@ -82,6 +119,10 @@ class AbducoBackend {
     this.binary = binary;
     mkdirp(ABDUCO_DIR);
   }
+
+  setSessionTuiMode() {}
+  querySessionTuiMode() { return null; }
+  captureSessionSnapshot() { return null; }
 
   // Env that makes abduco use our session directory instead of ~/.abduco.
   // Abduco still nests further under <binary-basename>/<user>/ inside this
@@ -167,8 +208,11 @@ class AbducoBackend {
       } catch (e) { /* fall through — -a will error loudly if truly broken */ }
     }
     return {
-      spawnFile: this.binary,
-      spawnArgs: ['-a', '-e', '^@', sessionName],
+      // Some bundled abduco builds emit protocol trace on stderr. Redirect only
+      // stderr away from the PTY so stdout (the real terminal stream) still
+      // reaches xterm while the debug noise is suppressed.
+      spawnFile: '/bin/sh',
+      spawnArgs: ['-lc', `exec ${shellEscape(this.binary)} -a -e '^@' ${shellEscape(sessionName)} 2>/dev/null`],
       env,
     };
   }
@@ -198,12 +242,22 @@ class TmuxBackend {
     this.name = 'tmux';
     this.binary = binary;
     this._writeConf();
+    this._syncConf();
   }
 
   _writeConf() {
     try {
       mkdirp(STATE_DIR);
       fs.writeFileSync(TMUX_CONF, TMUX_CONF_CONTENT);
+    } catch (e) {}
+  }
+
+  _syncConf() {
+    try {
+      execFileSync(this.binary, ['-S', TMUX_SOCKET, 'start-server'], { stdio: 'pipe' });
+    } catch (e) {}
+    try {
+      execFileSync(this.binary, ['-S', TMUX_SOCKET, 'source-file', TMUX_CONF], { stdio: 'pipe' });
     } catch (e) {}
   }
 
@@ -248,9 +302,9 @@ class TmuxBackend {
       }
     }
     return {
-      spawnFile: this.binary,
-      spawnArgs: ['-S', TMUX_SOCKET, '-f', TMUX_CONF, 'attach-session', '-t', sessionName],
-      env: baseEnv,
+      spawnFile: process.execPath,
+      spawnArgs: [TMUX_CONTROL_CLIENT, this.binary, TMUX_SOCKET, TMUX_CONF, sessionName],
+      env: buildControlClientEnv(baseEnv),
     };
   }
 
@@ -258,6 +312,63 @@ class TmuxBackend {
     try {
       execSync(`${this.binary} -S "${TMUX_SOCKET}" kill-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
     } catch (e) {}
+  }
+
+  setSessionTuiMode(sessionName, inTui) {
+    if (!sessionName) return;
+    try {
+      execFileSync(this.binary, [
+        '-S', TMUX_SOCKET,
+        'set-option', '-t', sessionName,
+        'mouse', inTui ? 'on' : 'off',
+      ], { stdio: 'pipe' });
+    } catch (e) {}
+  }
+
+  querySessionTuiMode(sessionName) {
+    if (!sessionName) return null;
+    try {
+      const out = execFileSync(this.binary, [
+        '-S', TMUX_SOCKET,
+        'list-panes', '-t', sessionName,
+        '-F', '#{alternate_on}',
+      ], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      if (!out) return null;
+      const first = out.split('\n').find(Boolean);
+      if (first === '1') return true;
+      if (first === '0') return false;
+    } catch (e) {}
+    return null;
+  }
+
+  captureSessionSnapshot(sessionName) {
+    if (!sessionName) return null;
+    try {
+      const paneInfo = execFileSync(this.binary, [
+        '-S', TMUX_SOCKET,
+        'list-panes', '-t', sessionName,
+        '-F', '#{pane_id}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}',
+      ], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      const [paneId, cursorXRaw, cursorYRaw, cursorFlagRaw] = paneInfo.split('\t');
+      if (!paneId) return null;
+
+      const captured = execFileSync(this.binary, [
+        '-S', TMUX_SOCKET,
+        'capture-pane', '-p', '-e', '-N',
+        '-t', paneId,
+      ], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+
+      const cursorX = Number.parseInt(cursorXRaw, 10);
+      const cursorY = Number.parseInt(cursorYRaw, 10);
+      const cursorVisible = cursorFlagRaw !== '0';
+      const normalized = captured.replace(/\n/g, '\r\n');
+      const moveCursor = Number.isInteger(cursorX) && Number.isInteger(cursorY)
+        ? `\x1b[${cursorY + 1};${cursorX + 1}H`
+        : '';
+
+      return `\x1b[?25l\x1b[H\x1b[2J${normalized}${moveCursor}${cursorVisible ? '\x1b[?25h' : ''}`;
+    } catch (e) {}
+    return null;
   }
 }
 
@@ -272,15 +383,18 @@ class NoBackend {
     return { spawnFile: innerCmd, spawnArgs: innerArgs, env: baseEnv };
   }
   killSession() {}
+  setSessionTuiMode() {}
+  querySessionTuiMode() { return null; }
+  captureSessionSnapshot() { return null; }
 }
 
 // ============================================
 // Factory
 // ============================================
 export function detectBackend() {
-  const abducoBin = resolveBinary('abduco');
-  if (abducoBin) return new AbducoBackend(abducoBin);
   const tmuxBin = resolveBinary('tmux');
   if (tmuxBin) return new TmuxBackend(tmuxBin);
+  const abducoBin = resolveBinary('abduco');
+  if (abducoBin) return new AbducoBackend(abducoBin);
   return new NoBackend();
 }

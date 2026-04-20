@@ -275,17 +275,15 @@ describe('CLI error cases', () => {
   });
 });
 
-describe('CLI terminal with role', () => {
-  it('termates new with --role creates terminal with role', async () => {
-    const res = await runCli(['new', '-n', 'RoleTest', '-r', 'coder']);
+describe('CLI terminal creation', () => {
+  it('termates new creates a named terminal that appears in the list', async () => {
+    const res = await runCli(['new', '-n', 'NamedTest']);
     expect(res.code).toBe(0);
     expect(res.stdout).toContain('Created');
 
-    // Verify role appears in list
     const list = await runCli(['ls']);
-    expect(list.stdout).toContain('RoleTest');
+    expect(list.stdout).toContain('NamedTest');
 
-    // Cleanup
     const match = res.stdout.match(/\b(t\d+)\b/);
     if (match) await runCli(['destroy', match[1]]);
   });

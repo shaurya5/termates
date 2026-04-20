@@ -8,25 +8,29 @@ import {
   nextTermName,
   DEFAULT_AGENT_PRESETS,
   normalizeAgentPresets,
-  persistAgentPresets,
+  persistSettings,
 } from './state.js';
 import { send } from './transport.js';
-import { createWorkspace, showWorkspaceDialog } from './workspace.js';
+import { createWorkspace } from './workspace.js';
 import { destroyTerminalLocally } from './events.js';
 import { showNotif } from './notifications.js';
+
+function workspaceDefaultCwd(ws = activeWs()) {
+  return ws?.type === 'remote' || ws?.sshTarget ? (ws?.remoteCwd || '') : (ws?.cwd || '');
+}
 
 export function showCreateDialog() {
   const d = document.getElementById('create-dialog');
   const ws = activeWs();
   const isRemote = ws?.type === 'remote' || !!ws?.sshTarget;
+
   document.getElementById('create-name').value = nextTermName();
-  document.getElementById('create-role').value = '';
-  // Pre-fill working directory from workspace
-  const cwdInput = document.getElementById('create-cwd');
-  cwdInput.value = (isRemote ? ws?.remoteCwd : ws?.cwd) || '';
-  // Hide browse button for remote workspaces
+  document.getElementById('create-cwd').value = workspaceDefaultCwd(ws);
   document.getElementById('create-cwd-browse').classList.toggle('hidden', isRemote);
-  d.showModal(); document.getElementById('create-name').focus(); document.getElementById('create-name').select();
+
+  d.showModal();
+  document.getElementById('create-name').focus();
+  document.getElementById('create-name').select();
 }
 
 export function showEditDialog(id) {
@@ -34,17 +38,17 @@ export function showEditDialog(id) {
   if (!t) return;
   document.getElementById('edit-id').value = id;
   document.getElementById('edit-name').value = t.name;
-  document.getElementById('edit-role').value = t.role || '';
   document.getElementById('edit-status').value = t.status || 'idle';
   document.getElementById('edit-dialog').showModal();
-  document.getElementById('edit-name').focus(); document.getElementById('edit-name').select();
+  document.getElementById('edit-name').focus();
+  document.getElementById('edit-name').select();
 }
 
-export function showAgentPresetsDialog() {
-  const presets = normalizeAgentPresets(S.agentPresets);
-  document.getElementById('agent-claude-command').value = presets.claude.command;
-  document.getElementById('agent-codex-command').value = presets.codex.command;
-  document.getElementById('agent-presets-dialog').showModal();
+export function showPresetsDialog() {
+  const agentPresets = normalizeAgentPresets(S.agentPresets);
+  document.getElementById('agent-claude-command').value = agentPresets.claude.command;
+  document.getElementById('agent-codex-command').value = agentPresets.codex.command;
+  document.getElementById('presets-dialog').showModal();
   document.getElementById('agent-claude-command').focus();
 }
 
@@ -52,22 +56,26 @@ export function setupDialogEvents() {
   // Create dialog
   document.getElementById('create-confirm').addEventListener('click', () => {
     const name = document.getElementById('create-name').value.trim() || nextTermName();
-    const role = document.getElementById('create-role').value || undefined;
     const cwd = document.getElementById('create-cwd').value.trim() || undefined;
-    send('terminal:create', { name, role, cwd });
+    send('terminal:create', { name, cwd });
     document.getElementById('create-dialog').close();
   });
   document.getElementById('create-cancel').addEventListener('click', () => document.getElementById('create-dialog').close());
-  document.getElementById('create-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('create-confirm').click(); } });
+  document.getElementById('create-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById('create-confirm').click();
+    }
+  });
 
   // Edit terminal dialog
   document.getElementById('edit-confirm').addEventListener('click', () => {
     const id = document.getElementById('edit-id').value;
     const name = document.getElementById('edit-name').value.trim();
-    const role = document.getElementById('edit-role').value;
     const status = document.getElementById('edit-status').value;
     if (id && name) {
-      send('terminal:configure', { id, name, role: role || null });
+      send('terminal:configure', { id, name });
       if (status) send('terminal:status', { id, status });
     }
     document.getElementById('edit-dialog').close();
@@ -75,15 +83,20 @@ export function setupDialogEvents() {
   document.getElementById('edit-cancel').addEventListener('click', () => document.getElementById('edit-dialog').close());
   document.getElementById('edit-delete').addEventListener('click', () => {
     const id = document.getElementById('edit-id').value;
-    if (id) { destroyTerminalLocally(id); send('terminal:destroy', { id }); }
+    if (id) {
+      destroyTerminalLocally(id);
+      send('terminal:destroy', { id });
+    }
     document.getElementById('edit-dialog').close();
   });
-  document.getElementById('edit-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('edit-confirm').click(); });
+  document.getElementById('edit-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('edit-confirm').click();
+  });
 
   // Workspace dialog
-  document.querySelectorAll('input[name="ws-type"]').forEach(r => {
-    r.addEventListener('change', () => {
-      const isRemote = r.value === 'remote' && r.checked;
+  document.querySelectorAll('input[name="ws-type"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const isRemote = radio.value === 'remote' && radio.checked;
       document.getElementById('ws-ssh-fields').classList.toggle('hidden', !isRemote);
       document.getElementById('ws-local-fields').classList.toggle('hidden', isRemote);
     });
@@ -94,26 +107,35 @@ export function setupDialogEvents() {
     const cwd = document.getElementById('ws-cwd').value.trim();
     const sshTarget = document.getElementById('ws-ssh-target').value.trim();
     const remoteCwd = document.getElementById('ws-remote-cwd').value.trim();
-    if (type === 'remote' && !sshTarget) { showNotif('SSH target required for remote workspace', 'warning'); return; }
+    if (type === 'remote' && !sshTarget) {
+      showNotif('SSH target required for remote workspace', 'warning');
+      return;
+    }
     createWorkspace(name, type, cwd || null, sshTarget || null, remoteCwd || null);
     document.getElementById('ws-dialog').close();
   });
   document.getElementById('ws-cancel').addEventListener('click', () => document.getElementById('ws-dialog').close());
-  document.getElementById('ws-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); document.getElementById('ws-confirm').click(); } });
+  document.getElementById('ws-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById('ws-confirm').click();
+    }
+  });
 
-  // Agent presets dialog
-  document.getElementById('agent-presets-save').addEventListener('click', () => {
+  // Launcher commands dialog
+  document.getElementById('presets-save').addEventListener('click', () => {
     S.agentPresets = normalizeAgentPresets({
       claude: { command: document.getElementById('agent-claude-command').value },
       codex: { command: document.getElementById('agent-codex-command').value },
     });
-    persistAgentPresets();
+    persistSettings();
     refreshAgentPresetButtons();
-    document.getElementById('agent-presets-dialog').close();
-    showNotif('Agent presets saved', 'success');
+    document.getElementById('presets-dialog').close();
+    showNotif('Launcher commands saved', 'success');
   });
-  document.getElementById('agent-presets-cancel').addEventListener('click', () => document.getElementById('agent-presets-dialog').close());
-  document.getElementById('agent-presets-reset').addEventListener('click', () => {
+  document.getElementById('presets-cancel').addEventListener('click', () => document.getElementById('presets-dialog').close());
+  document.getElementById('presets-reset').addEventListener('click', () => {
     document.getElementById('agent-claude-command').value = DEFAULT_AGENT_PRESETS.claude.command;
     document.getElementById('agent-codex-command').value = DEFAULT_AGENT_PRESETS.codex.command;
   });
@@ -147,7 +169,7 @@ export function refreshAgentPresetButtons() {
     button.classList.toggle('is-empty', !hasCommand);
     button.disabled = inTui;
     button.title = !hasCommand
-      ? `Configure ${label} preset`
+      ? `Configure ${label} launcher`
       : inTui
         ? `Exit the running program before launching ${label}`
         : `Launch ${label}`;

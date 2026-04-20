@@ -44,8 +44,11 @@ tar xzf abduco.tar.gz
 cd "abduco-${ABDUCO_VERSION}"
 
 echo "==> Building"
-# Append to CFLAGS rather than replacing it — the upstream config.mk sets
-# -DVERSION=\"0.6\" there, and stomping on it breaks the build.
+# Upstream's strict POSIX feature-test macros break this host's Apple SDK
+# build, so we keep the historically working local CFLAGS override here. The
+# app suppresses bundled abduco's stderr on attach, which keeps protocol trace
+# out of the terminal without changing the runtime behaviour of this build.
+make clean >/dev/null 2>&1 || true
 make CFLAGS="-O2 -Wall -DVERSION=\\\"${ABDUCO_VERSION}\\\"" >/dev/null
 strip abduco || true
 
@@ -53,4 +56,3 @@ cp abduco "${OUT_BINARY}"
 chmod +x "${OUT_BINARY}"
 
 echo "==> Wrote ${OUT_BINARY} ($(du -h "${OUT_BINARY}" | cut -f1))"
-"${OUT_BINARY}" -v | head -1 || true

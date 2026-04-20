@@ -51,6 +51,9 @@ vi.mock('child_process', () => ({
     // - new-session etc. → ignored return value
     return '';
   },
+  execFileSync(_cmd, _args, _opts) {
+    return '';
+  },
 }));
 
 // Intercept fs so _writeTmuxConf and StateManager._doSave never touch disk.

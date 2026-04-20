@@ -6,11 +6,10 @@
 
 Users want to run several coding agents side by side, usually 2-5 at a time:
 
-- a lead or planner
-- one or more coding agents
-- a reviewer
-- a tester
-- sometimes a researcher or ops terminal
+- one or more coding terminals
+- a review or verification terminal
+- a research/docs terminal
+- sometimes a remote or ops terminal
 
 The hard part is not opening terminals. The hard part is making those terminals repeatable, visible, and easy to manage across local repos and remote hosts.
 
@@ -34,8 +33,7 @@ The hard part is not opening terminals. The hard part is making those terminals 
 
 ```text
 Workspace preset
-  -> launch planner
-  -> terminal creation + metadata
+  -> terminal creation + presets
   -> PTY/tmux persistence layer
   -> workspace state + layout restore
   -> agent status and attention UI
@@ -43,7 +41,7 @@ Workspace preset
 
 ### Phase 2
 
-- reusable runbooks and prompt snippets by role
+- reusable runbooks and prompt snippets by preset
 - shared team memory directory for repo instructions and handoff files
 - checkpoint/summarize actions for long-running agent terminals
 - remote workspace presets with bootstrap commands

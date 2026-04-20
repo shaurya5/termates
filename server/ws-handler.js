@@ -14,7 +14,7 @@ function handleWsMessage(ws, msg, ctx) {
 
   switch (type) {
     case 'terminal:create': {
-      const { name, shell, cwd, role, sshTarget, remoteCwd } = payload || {};
+      const { name, shell, cwd, sshTarget, remoteCwd } = payload || {};
       let terminal;
       // Check if active workspace is remote
       const wsState = stateManager.get();
@@ -23,15 +23,15 @@ function handleWsMessage(ws, msg, ctx) {
         // Auto-create as remote terminal using workspace's SSH target
         terminal = ptyManager.createRemote({
           name: name || `Terminal ${ptyManager.size + 1}`,
-          role, sshTarget: activeWsState.sshTarget,
+          sshTarget: activeWsState.sshTarget,
           remoteCwd: remoteCwd || activeWsState.remoteCwd,
         });
       } else if (sshTarget) {
-        terminal = ptyManager.createRemote({ name, role, sshTarget, remoteCwd });
+        terminal = ptyManager.createRemote({ name, sshTarget, remoteCwd });
       } else {
         // Inherit working directory from workspace if not explicitly set
         const effectiveCwd = cwd || activeWsState?.cwd || undefined;
-        terminal = ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd: effectiveCwd, role });
+        terminal = ptyManager.create({ name: name || `Terminal ${ptyManager.size + 1}`, shell, cwd: effectiveCwd });
       }
       subscribeTerminalOutput(terminal);
       addTerminalToWorkspace(terminal.id);
@@ -40,9 +40,9 @@ function handleWsMessage(ws, msg, ctx) {
         payload: {
           id: terminal.id,
           name: terminal.name,
-          role: terminal.role,
           status: terminal.status,
           inTui: terminal.inTui,
+          tmuxSession: terminal.tmuxSession,
         },
       });
       persistState();
@@ -70,6 +70,17 @@ function handleWsMessage(ws, msg, ctx) {
       break;
     }
 
+    case 'terminal:snapshot': {
+      sendTo(ws, {
+        type: 'terminal:snapshot',
+        payload: {
+          id: payload.id,
+          data: ptyManager.snapshot(payload.id),
+        },
+      });
+      break;
+    }
+
     case 'terminal:rename': {
       if (ptyManager.rename(payload.id, payload.name)) {
         broadcast({ type: 'terminal:renamed', payload: { id: payload.id, name: payload.name } });
@@ -79,10 +90,9 @@ function handleWsMessage(ws, msg, ctx) {
     }
 
     case 'terminal:configure': {
-      const { id, name, role } = payload;
+      const { id, name } = payload;
       if (name !== undefined) ptyManager.rename(id, name);
-      if (role !== undefined) ptyManager.setRole(id, role);
-      broadcast({ type: 'terminal:configured', payload: { id, name, role } });
+      broadcast({ type: 'terminal:configured', payload: { id, name } });
       persistState();
       break;
     }
@@ -155,9 +165,12 @@ function handleWsMessage(ws, msg, ctx) {
     }
 
     case 'settings:update': {
+      const nextPayload = {};
       if (payload.agentPresets !== undefined) {
-        const agentPresets = stateManager.setAgentPresets(payload.agentPresets);
-        broadcast({ type: 'settings:updated', payload: { agentPresets } });
+        nextPayload.agentPresets = stateManager.setAgentPresets(payload.agentPresets);
+      }
+      if (Object.keys(nextPayload).length) {
+        broadcast({ type: 'settings:updated', payload: nextPayload });
       }
       break;
     }

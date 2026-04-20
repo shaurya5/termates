@@ -87,9 +87,8 @@ program
       }
       console.log('\n  Terminals:');
       for (const t of result.terminals) {
-        const role = t.role ? ` [${t.role}]` : '';
         const status = t.status !== 'idle' ? ` (${t.status})` : '';
-        console.log(`    ${t.id}  ${t.name}${role}${status}`);
+        console.log(`    ${t.id}  ${t.name}${status}`);
       }
       if (result.links?.length > 0) {
         console.log('\n  Links:');
@@ -110,7 +109,6 @@ program
   .command('new')
   .description('Create a new terminal')
   .option('-n, --name <name>', 'Terminal name')
-  .option('-r, --role <role>', 'Role (lead, coder, reviewer, tester, researcher, devops)')
   .option('-d, --cwd <dir>', 'Working directory')
   .option('-s, --shell <shell>', 'Shell to use')
   .action(async (options) => {
@@ -118,7 +116,6 @@ program
       const result = await sendCommand({
         command: 'create',
         name: options.name,
-        role: options.role,
         cwd: options.cwd,
         shell: options.shell,
       });
@@ -222,10 +219,9 @@ program
   .command('ssh <target>')
   .description('Create a persistent SSH terminal (e.g. termates ssh user@host)')
   .option('-n, --name <name>', 'Terminal name')
-  .option('-r, --role <role>', 'Agent role')
   .action(async (target, options) => {
     try {
-      const result = await sendCommand({ command: 'ssh', target, name: options.name, role: options.role });
+      const result = await sendCommand({ command: 'ssh', target, name: options.name });
       if (result.ok) console.log(`SSH terminal created: ${result.name} (${result.id})`);
       else { console.error('Error:', result.error); process.exit(1); }
     } catch (err) { console.error(err.message); process.exit(1); }

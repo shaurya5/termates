@@ -4,7 +4,7 @@
  * The perf tests cover create/destroy cycles and buffer throughput, but
  * these methods are used by every CLI command and WebSocket handler and
  * have ZERO coverage:
- *   resolve(), getByName(), rename(), setRole(), setStatus(),
+ *   resolve(), getByName(), rename(), setStatus(),
  *   write(), list(), getBuffer(), detachAll(), destroyAll()
  *
  * A regression in resolve() or getByName() silently breaks every CLI
@@ -57,12 +57,18 @@ vi.mock('fs', async (importOriginal) => {
       existsSync: vi.fn(() => true),
       mkdirSync: vi.fn(),
       writeFileSync: vi.fn(),
+      readFileSync: vi.fn((filePath, ...args) => {
+        if (typeof filePath === 'string' && filePath.includes('binaries/abduco-')) {
+          return Buffer.from('quiet-test-abduco');
+        }
+        return real.readFileSync(filePath, ...args);
+      }),
     },
   };
 });
 
 import { PtyManager, buildTerminalEnv } from '../../server/pty-manager.js';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -72,7 +78,60 @@ let mgr;
 
 beforeEach(() => {
   _lastSpawnArgs = null;
+  execSync.mockImplementation(() => '');
+  execFileSync.mockImplementation(() => '');
   mgr = new PtyManager();
+});
+
+describe('backend selection', () => {
+  it('prefers tmux when both tmux and abduco are available', () => {
+    execSync.mockImplementation((command) => {
+      if (command.includes('command -v tmux')) return '/usr/bin/tmux\n';
+      if (command.includes('command -v abduco')) return '/usr/bin/abduco\n';
+      return '';
+    });
+
+    const tmuxMgr = new PtyManager();
+    tmuxMgr.create({ id: 'bk1', name: 'Backend' });
+
+    expect(tmuxMgr.backend.name).toBe('tmux');
+    expect(_lastSpawnArgs[0]).toBe(process.execPath);
+    expect(_lastSpawnArgs[1][0]).toMatch(/server\/tmux-control-client\.js$/);
+    expect(_lastSpawnArgs[1][1]).toBe('/usr/bin/tmux');
+  });
+});
+
+describe('session input passthrough', () => {
+  it('turns tmux mouse on only while a pane is in alt-screen', () => {
+    execSync.mockImplementation((command) => {
+      if (command.includes('command -v tmux')) return '/usr/bin/tmux\n';
+      if (command.includes('command -v abduco')) return '/usr/bin/abduco\n';
+      return '';
+    });
+    execFileSync.mockClear();
+
+    const tmuxMgr = new PtyManager();
+    const terminal = tmuxMgr.create({ id: 'tui1', name: 'TUI' });
+    const mockPty = _lastMockPty;
+
+    execFileSync.mockClear();
+    mockPty._emit('\x1b[?1049h');
+    expect(terminal.inTui).toBe(true);
+    expect(execFileSync).toHaveBeenCalledWith('/usr/bin/tmux', [
+      '-S', expect.any(String),
+      'set-option', '-t', 'termates-tui1',
+      'mouse', 'on',
+    ], { stdio: 'pipe' });
+
+    execFileSync.mockClear();
+    mockPty._emit('\x1b[?1049l');
+    expect(terminal.inTui).toBe(false);
+    expect(execFileSync).toHaveBeenCalledWith('/usr/bin/tmux', [
+      '-S', expect.any(String),
+      'set-option', '-t', 'termates-tui1',
+      'mouse', 'off',
+    ], { stdio: 'pipe' });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -167,34 +226,6 @@ describe('rename()', () => {
 });
 
 // ---------------------------------------------------------------------------
-// setRole()
-// ---------------------------------------------------------------------------
-
-describe('setRole()', () => {
-  it('sets a role and returns true', () => {
-    mgr.create({ id: 'sr1', name: 'Test' });
-    expect(mgr.setRole('sr1', 'coder')).toBe(true);
-    expect(mgr.get('sr1').role).toBe('coder');
-  });
-
-  it('clears role when set to empty string', () => {
-    mgr.create({ id: 'sr2', name: 'Test', role: 'reviewer' });
-    mgr.setRole('sr2', '');
-    expect(mgr.get('sr2').role).toBeNull();
-  });
-
-  it('clears role when set to null', () => {
-    mgr.create({ id: 'sr3', name: 'Test', role: 'coder' });
-    mgr.setRole('sr3', null);
-    expect(mgr.get('sr3').role).toBeNull();
-  });
-
-  it('returns false for non-existent terminal', () => {
-    expect(mgr.setRole('nonexistent', 'coder')).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // setStatus()
 // ---------------------------------------------------------------------------
 
@@ -280,6 +311,28 @@ describe('reattach()', () => {
     expect(terminal).not.toBeNull();
     expect(terminal.id).toBe('rt1');
   });
+
+  it('queries tmux for the live TUI state when restoring a session', () => {
+    execSync.mockImplementation((command) => {
+      if (command.includes('command -v tmux')) return '/usr/bin/tmux\n';
+      if (command.includes('command -v abduco')) return '/usr/bin/abduco\n';
+      return '';
+    });
+    execFileSync.mockImplementation((cmd, args) => {
+      if (cmd === '/usr/bin/tmux' && args.includes('list-panes')) return '1\n';
+      return '';
+    });
+
+    const tmuxMgr = new PtyManager();
+    const terminal = tmuxMgr.reattach({ id: 'rt2', name: 'Restored', inTui: false });
+
+    expect(terminal.inTui).toBe(true);
+    expect(execFileSync).toHaveBeenCalledWith('/usr/bin/tmux', [
+      '-S', expect.any(String),
+      'set-option', '-t', 'termates-rt2',
+      'mouse', 'on',
+    ], { stdio: 'pipe' });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -292,13 +345,12 @@ describe('list()', () => {
   });
 
   it('returns serialized terminal objects with correct shape', () => {
-    mgr.create({ id: 'l1', name: 'Alpha', role: 'coder' });
+    mgr.create({ id: 'l1', name: 'Alpha' });
 
     const list = mgr.list();
     expect(list).toHaveLength(1);
     expect(list[0]).toHaveProperty('id', 'l1');
     expect(list[0]).toHaveProperty('name', 'Alpha');
-    expect(list[0]).toHaveProperty('role', 'coder');
     expect(list[0]).toHaveProperty('status', 'idle');
     expect(list[0]).toHaveProperty('tmuxSession');
     expect(list[0]).toHaveProperty('createdAt');
@@ -313,15 +365,13 @@ describe('list()', () => {
     expect(item).not.toHaveProperty('exitCallbacks');
   });
 
-  it('reflects changes made via setStatus/rename/setRole', () => {
+  it('reflects changes made via setStatus/rename', () => {
     mgr.create({ id: 'l3', name: 'Original' });
     mgr.rename('l3', 'Updated');
-    mgr.setRole('l3', 'reviewer');
     mgr.setStatus('l3', 'warning');
 
     const item = mgr.list().find(t => t.id === 'l3');
     expect(item.name).toBe('Updated');
-    expect(item.role).toBe('reviewer');
     expect(item.status).toBe('warning');
   });
 });
@@ -471,10 +521,9 @@ describe('destroy()', () => {
 
 describe('create() terminal object', () => {
   it('has all expected properties', () => {
-    const t = mgr.create({ id: 'co1', name: 'Test', role: 'coder' });
+    const t = mgr.create({ id: 'co1', name: 'Test' });
     expect(t.id).toBe('co1');
     expect(t.name).toBe('Test');
-    expect(t.role).toBe('coder');
     expect(t.status).toBe('idle');
     expect(t.buffer).toEqual([]);
     expect(t.maxBufferLines).toBe(2000);
@@ -497,11 +546,6 @@ describe('create() terminal object', () => {
   it('defaults name to "Terminal <id>" when no name given', () => {
     const t = mgr.create({ id: 'co2' });
     expect(t.name).toBe('Terminal co2');
-  });
-
-  it('defaults role to null when not provided', () => {
-    const t = mgr.create({ id: 'co3', name: 'Test' });
-    expect(t.role).toBeNull();
   });
 
   it('sanitizes inherited terminal env before spawning', () => {
@@ -612,7 +656,6 @@ describe('buildTerminalEnv()', () => {
     const env = buildTerminalEnv({
       id: 'env1',
       name: 'Test Env',
-      role: 'coder',
       baseEnv: {
         PATH: '/usr/bin:/bin',
         HOME: '/tmp/home',
@@ -629,6 +672,7 @@ describe('buildTerminalEnv()', () => {
     expect(env.TMUX).toBeUndefined();
     expect(env.KITTY_WINDOW_ID).toBeUndefined();
     expect(env.TERM_PROGRAM).toBe('Termates');
-    expect(env.TERMATES_ROLE).toBe('coder');
+    expect(env.TERMATES_TERMINAL_ID).toBe('env1');
+    expect(env.TERMATES_TERMINAL_NAME).toBe('Test Env');
   });
 });

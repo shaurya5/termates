@@ -92,9 +92,9 @@ export function buildRemoteTmuxCommand(target, sessionName, remoteCwd) {
   const socketPath = path.join(SSH_SOCKETS_DIR, safeTarget);
 
   let remoteCmd;
-  // Kill stale session, cd, create tmux with mouse/scroll config inline
+  // Kill stale session, cd, create tmux with transparent UI config inline
   const kill = `tmux kill-session -t ${sessionName} 2>/dev/null;`;
-  const tmuxOpts = `\\; set mouse off \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
+  const tmuxOpts = `\\; set mouse off \\; set focus-events on \\; set status off \\; set escape-time 0 \\; set history-limit 50000`;
   if (remoteCwd) {
     const expandedCwd = shellEscapeRemoteCwd(remoteCwd);
     remoteCmd = `${kill} cd ${expandedCwd} && tmux new-session -s ${sessionName} ${tmuxOpts}`;

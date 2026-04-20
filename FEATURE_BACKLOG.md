@@ -24,7 +24,7 @@ The focus here is practical multi-agent development: Claude Code, Codex, Aider, 
 
 | Priority | Feature | Why Users Care | Likely Touchpoints |
 | --- | --- | --- | --- |
-| P1 | Workspace templates for common agent teams | Most users will reuse the same 2-5 terminal setup: lead, coder, reviewer, tester, researcher. | `src/client/workspace.js`, dialogs, `server/state-manager.js`, CLI |
+| P1 | Workspace templates for common agent teams | Most users will reuse the same 2-5 terminal setup and startup commands across projects. | `src/client/workspace.js`, dialogs, `server/state-manager.js`, CLI |
 | P1 | Per-terminal launch profiles | Agent terminals need repeatable shell, cwd, env vars, and startup commands. | `server/pty-manager.js`, `server/state-manager.js`, create-terminal UI, CLI |
 | P1 | Git worktree per agent | Separate worktrees are one of the highest-leverage workflows for multiple coding agents. | workspace creation flow, CLI, `server/state-manager.js` |
 | P1 | Agent attention queue | Users need one place to see which terminal is idle, failed, waiting, or asking for review. | `src/client/sidebar.js`, `src/client/events.js`, `server/pty-manager.js` |
@@ -35,21 +35,21 @@ The focus here is practical multi-agent development: Claude Code, Codex, Aider, 
 
 | Priority | Feature | Why Users Care | Likely Touchpoints |
 | --- | --- | --- | --- |
-| P1 | Role-based bootstrap snippets | Spinning up a reviewer or tester should not require retyping the same prompts and shell setup every time. | terminal creation dialogs, CLI, persisted profiles |
+| P1 | Terminal presets | Spinning up a terminal with the right cwd, env, startup command, and provider command should not require retyping setup every time. | terminal creation dialogs, CLI, persisted profiles |
 | P1 | Browser snapshot handoff into a terminal | Research and docs are already in-app; pushing captured context into the active agent terminal is a natural next step. | `server/index.js`, `src/client/browser-panel.js`, terminal actions |
-| P1 | One-click review/test loops | “Open reviewer”, “run tests”, and “prepare diff review” are common, repeated workflows. | UI actions, CLI helpers, terminal bootstrap layer |
+| P1 | One-click review/test loops | “Open a review terminal”, “run tests”, and “prepare diff review” are common, repeated workflows. | UI actions, CLI helpers, terminal bootstrap layer |
 | P2 | Shared team memory directory + generated agent instructions | Long-running teams need a durable place for repo context, conventions, and task state. | `ROADMAP.md`, persistence layer, CLI |
 | P2 | Provider/model badges per terminal | Users running Codex and Claude side by side need to know which agent is in which pane at a glance. | `server/state-manager.js`, sidebar, configure-terminal dialog |
 | P2 | Agent checkpoint / summarize actions | A quick checkpoint is more useful than raw scrollback when several agents run in parallel. | CLI, terminal actions, possible file export |
-| P2 | Prompt routing by role alias | Commands like “send to reviewer” or “focus tester” are faster than remembering terminal IDs. | CLI, sidebar, terminal metadata |
-| P3 | Policy-aware runbooks | Teams often want repo-specific “before merge” or “before review” checklists tied to agent roles. | preset storage, CLI, workspace metadata |
+| P2 | Prompt routing by terminal alias | Commands like “send to review” or “focus tests” are faster than remembering terminal IDs. | CLI, sidebar, terminal metadata |
+| P3 | Policy-aware runbooks | Teams often want repo-specific “before merge” or “before review” checklists tied to presets or workflows. | preset storage, CLI, workspace metadata |
 
 ## Workspace And Terminal UX
 
 | Priority | Feature | Why Users Care | Likely Touchpoints |
 | --- | --- | --- | --- |
 | P1 | Terminal search/filter in the sidebar | Larger agent teams become hard to scan with a flat list. | `src/client/sidebar.js`, `public/index.html`, `public/style.css` |
-| P1 | Pin/favorite terminals | Lead and primary coder terminals usually need to stay prominent. | `server/state-manager.js`, `src/client/sidebar.js` |
+| P1 | Pin/favorite terminals | A few high-value terminals usually need to stay prominent. | `server/state-manager.js`, `src/client/sidebar.js` |
 | P1 | Restore the exact active terminal per workspace | Restarting the app should return users to the same agent and pane they were using. | `server/state-manager.js`, `src/client/state.js`, `src/client/events.js` |
 | P2 | Pane maximization / temporary fullscreen | Reviewing diffs, logs, or long agent output needs more room than dense split layouts allow. | `src/client/layout/renderer.js`, shared layout helpers |
 | P2 | Duplicate workspace / clone layout | Users often want to fork an agent team setup for another branch or experiment. | `src/client/workspace.js`, `server/state-manager.js` |
@@ -61,7 +61,7 @@ The focus here is practical multi-agent development: Claude Code, Codex, Aider, 
 | Priority | Feature | Why Users Care | Likely Touchpoints |
 | --- | --- | --- | --- |
 | P1 | SSH host picker with aliases and metadata | Remote agent work should not depend on manual host typing every time. | `server/ssh-config.js`, workspace dialog |
-| P1 | Saved remote workspace presets | Teams often reuse the same host + directory + role layout. | `server/state-manager.js`, workspace UI |
+| P1 | Saved remote workspace presets | Teams often reuse the same host + directory + terminal preset mix. | `server/state-manager.js`, workspace UI |
 | P2 | Remote reconnect and health indicators | Remote agents fail independently of the desktop UI; users need fast visibility. | `server/pty-manager.js`, sidebar, notifications |
 | P2 | Remote bootstrap commands | SSH workspaces should be able to auto-open a repo, activate envs, and start the right agent flow. | terminal creation path, remote workspace settings |
 | P2 | Per-workspace env vars and secrets references | Multi-agent repos usually need shared environment setup without manual copy/paste. | state manager, creation APIs, dialogs |

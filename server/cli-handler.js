@@ -23,20 +23,20 @@ function handleCliCommand(socket, msg, ctx) {
         break;
 
       case 'create': {
-        const terminal = ptyManager.create({ name: msg.name, shell: msg.shell, cwd: msg.cwd, role: msg.role });
+        const terminal = ptyManager.create({ name: msg.name, shell: msg.shell, cwd: msg.cwd });
         subscribeTerminalOutput(terminal);
         addTerminalToWorkspace(terminal.id);
-        broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status } });
+        broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, status: terminal.status } });
         persistState();
         respond({ ok: true, id: terminal.id, name: terminal.name });
         break;
       }
 
       case 'ssh': {
-        const terminal = ptyManager.createSsh({ name: msg.name, role: msg.role, target: msg.target });
+        const terminal = ptyManager.createSsh({ name: msg.name, target: msg.target });
         subscribeTerminalOutput(terminal);
         addTerminalToWorkspace(terminal.id);
-        broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, role: terminal.role, status: terminal.status } });
+        broadcast({ type: 'terminal:created', payload: { id: terminal.id, name: terminal.name, status: terminal.status } });
         persistState();
         respond({ ok: true, id: terminal.id, name: terminal.name });
         break;

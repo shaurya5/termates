@@ -5,9 +5,11 @@ import { TMUX_CONF_CONTENT } from '../../server/pty-manager.js';
 // Tests for the tmux configuration string exported by pty-manager.js.
 // These settings are critical for the transparent-tmux experience:
 //   - no status bar so it's invisible to the user
-//   - mouse passthrough for click/scroll
+//   - shell panes keep mouse off by default
+//   - focus events are forwarded to TUIs
 //   - no escape delay so Vim / readline feel snappy
-//   - right-click unbinds so context menus don't appear inside tmux
+//   - tmux advertises its real terminal type to pane processes
+//   - outer-terminal scrollback stays native instead of dropping into tmux
 //   - large scrollback buffer
 // ---------------------------------------------------------------------------
 
@@ -22,8 +24,12 @@ describe('TMUX_CONF_CONTENT', () => {
       expect(TMUX_CONF_CONTENT).toContain('set -g status off');
     });
 
-    it('disables mouse so xterm.js handles selection and scroll', () => {
+    it('keeps mouse off by default so shell panes behave like a normal terminal', () => {
       expect(TMUX_CONF_CONTENT).toContain('set -g mouse off');
+    });
+
+    it('enables focus events for full-screen TUIs', () => {
+      expect(TMUX_CONF_CONTENT).toContain('set -g focus-events on');
     });
 
     it('removes escape delay with "set -g escape-time 0"', () => {
@@ -32,6 +38,15 @@ describe('TMUX_CONF_CONTENT', () => {
 
     it('sets a large scrollback buffer with "set -g history-limit 50000"', () => {
       expect(TMUX_CONF_CONTENT).toContain('set -g history-limit 50000');
+    });
+
+    it('uses tmux-256color inside tmux panes', () => {
+      expect(TMUX_CONF_CONTENT).toContain('set -g default-terminal "tmux-256color"');
+    });
+
+    it('preserves the outer terminal scrollback by disabling tmux alternate-screen switching', () => {
+      expect(TMUX_CONF_CONTENT).toContain('smcup@');
+      expect(TMUX_CONF_CONTENT).toContain('rmcup@');
     });
   });
 

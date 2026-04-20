@@ -130,7 +130,7 @@ describe('StateManager', () => {
   describe('save / load round-trip', () => {
     it('preserves terminals after saveNow() and fresh load()', () => {
       const sm = new StateManager();
-      sm.setTerminals([{ id: 't1', name: 'Alpha', role: 'agent', status: 'busy', tmuxSession: 'termates-t1' }]);
+      sm.setTerminals([{ id: 't1', name: 'Alpha', status: 'busy', inTui: true, tmuxSession: 'termates-t1' }]);
       sm.saveNow();
 
       const sm2 = new StateManager();
@@ -139,7 +139,7 @@ describe('StateManager', () => {
       expect(terminals).toHaveLength(1);
       expect(terminals[0].id).toBe('t1');
       expect(terminals[0].name).toBe('Alpha');
-      expect(terminals[0].role).toBe('agent');
+      expect(terminals[0].inTui).toBe(true);
     });
 
     it('preserves workspaces after saveNow() and fresh load()', () => {
@@ -209,8 +209,8 @@ describe('StateManager', () => {
       const v1 = {
         version: 1,
         terminals: [
-          { id: 't1', name: 'Old', role: null, status: 'idle' },
-          { id: 't2', name: 'Older', role: null, status: 'idle' },
+          { id: 't1', name: 'Old', status: 'idle' },
+          { id: 't2', name: 'Older', status: 'idle' },
         ],
         nextTerminalId: 3,
         links: [{ from: 't1', to: 't2' }],
@@ -314,13 +314,13 @@ describe('StateManager', () => {
   describe('setters persist across save/load', () => {
     it('setTerminals() values survive saveNow() + load()', () => {
       const sm = new StateManager();
-      sm.setTerminals([{ id: 't9', name: 'Nine', role: 'watcher', status: 'idle', tmuxSession: null }]);
+      sm.setTerminals([{ id: 't9', name: 'Nine', status: 'idle', inTui: true, tmuxSession: null }]);
       sm.saveNow();
 
       const sm2 = new StateManager();
       sm2.load();
       expect(sm2.get().terminals[0].id).toBe('t9');
-      expect(sm2.get().terminals[0].role).toBe('watcher');
+      expect(sm2.get().terminals[0].inTui).toBe(true);
     });
 
     it('setWorkspaces() values survive saveNow() + load()', () => {
@@ -334,13 +334,14 @@ describe('StateManager', () => {
       expect(sm2.get().workspaces[0]).not.toHaveProperty('messages');
     });
 
-    it('setTerminals() strips unknown fields (only stores id, name, role, status, tmuxSession)', () => {
+    it('setTerminals() strips unknown fields (only stores id, name, status, inTui, tmuxSession)', () => {
       const sm = new StateManager();
-      sm.setTerminals([{ id: 't1', name: 'T', role: null, status: 'idle', tmuxSession: null, secretField: 'should-not-be-here' }]);
+      sm.setTerminals([{ id: 't1', name: 'T', status: 'idle', inTui: false, tmuxSession: null, secretField: 'should-not-be-here' }]);
       const saved = sm.get().terminals[0];
       expect(saved).not.toHaveProperty('secretField');
       expect(saved).toHaveProperty('id');
       expect(saved).toHaveProperty('name');
+      expect(saved).toHaveProperty('inTui');
     });
   });
 
