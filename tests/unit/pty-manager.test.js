@@ -307,7 +307,14 @@ describe('resize()', () => {
 
 describe('reattach()', () => {
   it('returns a terminal when the session exists', () => {
-    const terminal = mgr.reattach({ id: 'rt1', name: 'Restored' });
+    execSync.mockImplementation((command) => {
+      if (command.includes('command -v tmux')) return '/usr/bin/tmux\n';
+      if (command.includes('command -v abduco')) return '/usr/bin/abduco\n';
+      return '';
+    });
+
+    const tmuxMgr = new PtyManager();
+    const terminal = tmuxMgr.reattach({ id: 'rt1', name: 'Restored' });
     expect(terminal).not.toBeNull();
     expect(terminal.id).toBe('rt1');
   });

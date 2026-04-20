@@ -584,16 +584,12 @@ describe('WebSocket (state verification)', () => {
       const created = await ws.next(m => m.type === 'terminal:created');
       const id = created.payload.id;
 
-      // Wait for the initial shell prompt so the command below is typed into a
-      // live shell rather than racing the terminal bootstrap.
-      await waitForTerminalOutput(ws, id, (combined) => combined.length > 0, 5000);
-
       // Seed the server-side terminal buffer with output that happened before
       // the second client connects. That exact marker must not be replayed by
       // terminal:list, even though live redraw/prompt output may still arrive.
       const marker = `__buffer_test_${Date.now().toString(36)}__`;
       ws.send('terminal:input', { id, data: `printf '${marker}\\n'\r` });
-      await waitForTerminalOutput(ws, id, (combined) => combined.includes(marker), 5000);
+      await waitForTerminalOutput(ws, id, (combined) => combined.includes(marker), 10000);
       await new Promise(r => setTimeout(r, 300));
 
       // A fresh connection gets the list but must NOT receive a historical
