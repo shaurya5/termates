@@ -67,7 +67,7 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-import { PtyManager, buildTerminalEnv } from '../../server/pty-manager.js';
+import { PtyManager, buildTerminalEnv, loginShellArgs } from '../../server/pty-manager.js';
 import { execFileSync, execSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
@@ -673,7 +673,12 @@ describe('buildTerminalEnv()', () => {
       },
     });
 
-    expect(env.PATH).toBe('/usr/bin:/bin');
+    expect(env.PATH.split(':')).toEqual(expect.arrayContaining([
+      '/usr/bin',
+      '/bin',
+      '/opt/homebrew/bin',
+      '/Applications/Codex.app/Contents/Resources',
+    ]));
     expect(env.HOME).toBe('/tmp/home');
     expect(env.NO_COLOR).toBeUndefined();
     expect(env.TMUX).toBeUndefined();
@@ -681,5 +686,29 @@ describe('buildTerminalEnv()', () => {
     expect(env.TERM_PROGRAM).toBe('Termates');
     expect(env.TERMATES_TERMINAL_ID).toBe('env1');
     expect(env.TERMATES_TERMINAL_NAME).toBe('Test Env');
+  });
+
+  it('does not duplicate inherited PATH entries when adding developer bin paths', () => {
+    const env = buildTerminalEnv({
+      id: 'env2',
+      name: 'Path Env',
+      baseEnv: {
+        PATH: '/opt/homebrew/bin:/usr/bin:/bin:/opt/homebrew/bin',
+      },
+    });
+
+    expect(env.PATH.split(':').filter((entry) => entry === '/opt/homebrew/bin')).toHaveLength(1);
+  });
+});
+
+describe('loginShellArgs()', () => {
+  it('uses login mode for common user shells so profile PATH setup runs', () => {
+    expect(loginShellArgs('/bin/zsh')).toEqual(['-l']);
+    expect(loginShellArgs('/opt/homebrew/bin/bash')).toEqual(['-l']);
+    expect(loginShellArgs('/opt/homebrew/bin/fish')).toEqual(['-l']);
+  });
+
+  it('does not pass login flags to unknown shell wrappers', () => {
+    expect(loginShellArgs('/usr/local/bin/custom-shell')).toEqual([]);
   });
 });

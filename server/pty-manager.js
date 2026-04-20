@@ -26,6 +26,37 @@ const STRIP_ENV_PREFIXES = [
   'ZELLIJ_',
 ];
 
+function buildTerminalPath(basePath = '') {
+  const home = os.homedir();
+  const candidates = [
+    basePath,
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.bun', 'bin'),
+    path.join(home, '.superset', 'bin'),
+    path.join(home, 'bin'),
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/Applications/Codex.app/Contents/Resources',
+  ];
+
+  const seen = new Set();
+  return candidates
+    .flatMap((entry) => String(entry || '').split(':'))
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) return false;
+      seen.add(entry);
+      return true;
+    })
+    .join(':');
+}
+
+export function loginShellArgs(shellPath) {
+  const shellName = path.basename(shellPath || '').toLowerCase();
+  return new Set(['bash', 'zsh', 'fish', 'ksh', 'tcsh', 'csh']).has(shellName) ? ['-l'] : [];
+}
+
 export function buildTerminalEnv({ id, name, baseEnv = process.env }) {
   const env = { ...baseEnv };
 
@@ -41,6 +72,7 @@ export function buildTerminalEnv({ id, name, baseEnv = process.env }) {
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
   env.TERM_PROGRAM = 'Termates';
+  env.PATH = buildTerminalPath(env.PATH);
 
   return env;
 }
@@ -111,14 +143,14 @@ export class PtyManager {
     let spawnFile, spawnArgs, spawnEnv;
     if (sessionName) {
       const innerCmd = sshTarget ? 'ssh' : (shell || process.env.SHELL || '/bin/zsh');
-      const innerArgs = sshTarget ? [sshTarget] : [];
+      const innerArgs = sshTarget ? [sshTarget] : loginShellArgs(innerCmd);
       ({ spawnFile, spawnArgs, env: spawnEnv } = this.backend.buildSpawn({
         sessionName, innerCmd, innerArgs,
         baseEnv: env, cols: termCols, rows: termRows, cwd: workDir,
       }));
     } else {
       spawnFile = shell || process.env.SHELL || '/bin/zsh';
-      spawnArgs = [];
+      spawnArgs = loginShellArgs(spawnFile);
       spawnEnv = env;
     }
 
